@@ -17,6 +17,9 @@
 , libsecret
 , gnutls
 , zstd
+, libseccomp
+, wayland
+, wayland-scanner
 , squashfsTools
 , squashfuse
 , dwarfs
@@ -42,6 +45,7 @@ stdenv.mkDerivation(finalAttrs: {
     gobject-introspection
     wrapGAppsHook4
     makeWrapper
+    wayland-scanner
   ];
 
   buildInputs = [
@@ -54,6 +58,9 @@ stdenv.mkDerivation(finalAttrs: {
     libsecret
     gnutls
     zstd
+    # Sandbox hardening: seccomp filter and Wayland security context.
+    libseccomp
+    wayland
   ];
 
   mesonFlags = [
@@ -61,6 +68,8 @@ stdenv.mkDerivation(finalAttrs: {
     "-Dbundle_zsync=false"
     "-Dbundle_unsquashfs=false"
     "-Dbundle_squashfuse=false"
+    "-Dseccomp=enabled"
+    "-Dwayland_security_context=enabled"
   ];
 
   dontWrapGApps = true;
