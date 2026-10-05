@@ -62,8 +62,8 @@ namespace AppManager {
             set_option_context_summary("AppImage Manager - Manage and update AppImages on your system");
             set_option_context_description("""Commands:
   install PATH                Install an AppImage from PATH
-  uninstall PATH              Uninstall an AppImage (by path or checksum)
-  update PATH                 Update an installed AppImage (by path or checksum)
+  uninstall PATH              Uninstall an AppImage (by path)
+  update PATH                 Update an installed AppImage (by path)
 """);
         }
 
@@ -74,8 +74,8 @@ namespace AppManager {
 
 Commands:
   install PATH                Install an AppImage from PATH
-  uninstall PATH              Uninstall an AppImage (by path or checksum)
-  update PATH                 Update an installed AppImage (by path or checksum)
+  uninstall PATH              Uninstall an AppImage (by path)
+  update PATH                 Update an installed AppImage (by path)
 
 Options:
   -h, --help                  Show help options

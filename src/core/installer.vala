@@ -853,7 +853,6 @@ namespace AppManager.Core {
                 if (record.sandbox_enabled() && !SandboxConfig.supports_record(record)) {
                     record.sandbox_profile = null;
                 }
-                SandboxConfig.sync_manifest(record, registry.list());
 
                 // For fresh install with history (reinstall), use effective values (considers CLEARED_VALUE)
                 var effective_icon = record.get_effective_icon_name() ?? icon_name_for_desktop;
@@ -881,13 +880,16 @@ namespace AppManager.Core {
                     desktop_destination = Utils.FileUtils.unique_path(desktop_destination);
                 }
                 Utils.FileUtils.ensure_parent(desktop_destination);
-                
+                // The manifest's own-names come from desktop_file, and the manifest must
+                // exist before an Exec line pointing at sandbox-run does.
+                record.desktop_file = desktop_destination;
+                SandboxConfig.sync_manifest(record, registry.list());
+
                 // Always write desktop file - custom values from JSON are applied via get_effective_*()
                 // The old desktop file is deleted during uninstall, so we must write the new one
                 if (!GLib.FileUtils.set_contents(desktop_destination, desktop_contents)) {
                     throw new InstallerError.UNKNOWN("Unable to write desktop file");
                 }
-                record.desktop_file = desktop_destination;
                 // For self-install, use hicolor path; otherwise use flat icons directory
                 record.icon_path = is_self_install ? AppPaths.main_icon_path : stored_icon;
                 
@@ -1724,8 +1726,8 @@ namespace AppManager.Core {
          * Writes a one-line shell wrapper in place of the bin symlink so that a
          * terminal launch goes through the same sandbox as a desktop launch.
          *
-         * The wrapper holds no permissions of its own — it only re-enters sandbox-run,
-         * which reads the .args file. A permission change therefore never has to
+         * The wrapper holds no permissions of its own: it only re-enters sandbox-run,
+         * which reads the app's manifest. A permission change therefore never has to
          * rewrite this file.
          */
         private string? create_bin_wrapper(InstallationRecord record, string exec_path, string slug) {

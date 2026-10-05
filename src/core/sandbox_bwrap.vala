@@ -22,8 +22,8 @@ namespace AppManager.Core {
      */
     public class SandboxBwrap {
         // Launch-time state, filled in by the supervisor before compose() is called.
-        // All of it is optional: with none of it set, this builds the phase-1 sandbox
-        // (no bus, no seccomp).
+        // All of it is optional: with none of it set, the sandbox gets no bus and no
+        // seccomp filter.
         public int sync_fd = -1;                    // held open for the bus proxy's lifetime
         public int seccomp_fd = -1;                 // compiled BPF filter
         public string? session_bus_socket = null;   // proxied session bus socket
@@ -365,8 +365,8 @@ namespace AppManager.Core {
          * home and only loses the path agreement above.
          *
          * Keyed on the app id rather than the record id because it is the same identity
-         * the Wayland security context and the bus proxy's --own rules already use, and
-         * SandboxIdentity guarantees no two records share one.
+         * the Wayland security context already uses, and SandboxIdentity guarantees no
+         * two records share one.
          */
         public static string? host_cache_dir(string? app_id) {
             var id = (app_id ?? "").strip();
@@ -425,7 +425,7 @@ namespace AppManager.Core {
         private void add_wayland() {
             if (wayland_socket != null) {
                 // A security-context socket stands in for the compositor's own, so the
-                // compositor can tell this client is sandboxed. Phase 4.
+                // compositor can tell this client is sandboxed.
                 var name = "wayland-0";
                 add2("--ro-bind", wayland_socket, Path.build_filename(runtime_base, name));
                 setenv("WAYLAND_DISPLAY", name);
@@ -504,8 +504,8 @@ namespace AppManager.Core {
          *
          * If filtering leaves nothing, the original file is bound instead. That happens
          * on a setup whose entries are written in a form this filter does not recognise,
-         * and an app that cannot open its display at all is a worse outcome than the
-         * phase-one behaviour.
+         * and an app that cannot open its display at all is a worse outcome than one
+         * that sees the other cookies.
          */
         private void add_xauthority(string display_number) {
             var xauth = Environment.get_variable("XAUTHORITY");

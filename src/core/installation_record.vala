@@ -121,9 +121,9 @@ namespace AppManager.Core {
         public bool sandbox_allow_tray { get; set; default = true; }
         // Location. Reaches GeoClue2 on the system bus through the filtered proxy.
         public bool sandbox_allow_location { get; set; default = false; }
-        // Stable D-Bus / Wayland identity, generated once when sandboxing is first
-        // enabled and carried across upgrades: the compositor's security context and
-        // the proxy's --own rules are keyed by it, so it must never change under an app.
+        // Stable sandbox identity, generated once when sandboxing is first enabled and
+        // carried across upgrades: the compositor's security context and the sandbox
+        // cache dir are keyed by it, so it must never change under an app.
         public string? sandbox_app_id { get; set; }
         public bool sandbox_allow_downloads { get; set; default = true; }
         public bool sandbox_allow_documents { get; set; default = false; }
@@ -148,7 +148,7 @@ namespace AppManager.Core {
          * Copies the whole sandbox block from another record. Used when an upgrade
          * builds a fresh record for the same app: permissions the user granted must
          * survive, and sandbox_app_id especially so - the Wayland security context and
-         * the bus proxy's --own rules are keyed by it.
+         * the sandbox cache dir are keyed by it.
          *
          * Kept here rather than spelled out at the call site so a new toggle only has
          * to be added in this file.

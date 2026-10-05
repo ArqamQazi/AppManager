@@ -290,8 +290,7 @@ namespace AppManager.Core {
         }
 
         /**
-         * Whether the system bus half of the proxy is needed: BlueZ, and GeoClue2 now
-         * that location is no longer portal-backed.
+         * Whether the system bus half of the proxy is needed: BlueZ and GeoClue2.
          */
         public bool needs_system_bus() {
             return !full_session_bus && (bluetooth || location);

@@ -19,7 +19,7 @@
     <key name="auto-check-updates" type="b">
       <default>false</default>
       <summary>Automatically check for updates in background</summary>
-      <description>When enabled, AppManager will periodically check for AppImage updates using the XDG Background Portal</description>
+      <description>When enabled, AppManager will periodically check for AppImage updates from a background service started at login</description>
     </key>
     <key name="update-check-interval" type="i">
       <default>86400</default>
