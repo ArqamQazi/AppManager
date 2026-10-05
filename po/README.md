@@ -71,32 +71,32 @@ To start a translation for a language that doesn't exist yet:
 
 ## Translation Status
 
-Counted with `msgfmt --statistics` on 2026-10-03, out of 367 strings.
+Counted with `./scripts/translations.sh --check-only` on 2026-10-05, out of 464 strings.
 
 | Language | Code | Translated | Fuzzy |
 | -------- | ---- | ---------- | ----- |
-| Arabic | ar | 79.0% (290) | 9 |
-| German | de | 79.0% (290) | 9 |
-| Greek | el | 79.0% (290) | 9 |
-| Spanish | es | 100% (367) | 0 |
-| Estonian | et | 79.0% (290) | 9 |
-| Finnish | fi | 79.0% (290) | 9 |
-| French | fr | 100% (367) | 0 |
-| Irish | ga | 79.6% (292) | 8 |
-| Italian | it | 79.0% (290) | 9 |
-| Japanese | ja | 79.0% (290) | 9 |
-| Kazakh | kk | 79.0% (290) | 9 |
-| Korean | ko | 79.0% (290) | 9 |
-| Lithuanian | lt | 79.0% (290) | 9 |
-| Latvian | lv | 90.7% (333) | 9 |
-| Norwegian Bokmål | nb | 79.0% (290) | 9 |
-| Dutch | nl | 79.0% (290) | 9 |
-| Polish | pl | 85.0% (312) | 0 |
-| Portuguese (Brazil) | pt_BR | 79.0% (290) | 9 |
-| Swedish | sv | 79.0% (290) | 9 |
-| Ukrainian | uk | 79.3% (291) | 8 |
-| Vietnamese | vi | 79.0% (290) | 9 |
-| Chinese (Simplified) | zh_CN | 79.0% (290) | 9 |
+| Arabic | ar | 61.9% (287) | 9 |
+| German | de | 61.9% (287) | 9 |
+| Greek | el | 61.9% (287) | 9 |
+| Spanish | es | 78.2% (363) | 0 |
+| Estonian | et | 61.9% (287) | 9 |
+| Finnish | fi | 61.9% (287) | 9 |
+| French | fr | 78.2% (363) | 0 |
+| Irish | ga | 62.3% (289) | 8 |
+| Italian | it | 61.9% (287) | 9 |
+| Japanese | ja | 61.9% (287) | 9 |
+| Kazakh | kk | 61.9% (287) | 9 |
+| Korean | ko | 61.9% (287) | 9 |
+| Lithuanian | lt | 61.9% (287) | 9 |
+| Latvian | lv | 71.1% (330) | 9 |
+| Norwegian Bokmål | nb | 61.9% (287) | 9 |
+| Dutch | nl | 61.9% (287) | 9 |
+| Polish | pl | 66.6% (309) | 0 |
+| Portuguese (Brazil) | pt_BR | 61.9% (287) | 9 |
+| Swedish | sv | 61.9% (287) | 9 |
+| Ukrainian | uk | 62.1% (288) | 8 |
+| Vietnamese | vi | 61.9% (287) | 9 |
+| Chinese (Simplified) | zh_CN | 61.9% (287) | 9 |
 
 ## Note
 
