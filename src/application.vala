@@ -23,21 +23,18 @@ namespace AppManager {
         private static bool opt_background_update = false;
         private static bool opt_update_all = false;
         private static bool opt_update_check = false;
-        private static string? opt_install = null;
-        private static string? opt_uninstall = null;
-        private static string? opt_is_installed = null;
-        private static bool opt_keep_both = false;
-
+        // Options read by command_line() take a null arg_data: only then does GApplication
+        // pack them into the options dict that reaches the primary instance.
         private const OptionEntry[] options = {
             { "help", 'h', 0, OptionArg.NONE, ref opt_help, "Show help options", null },
             { "version", 0, 0, OptionArg.NONE, ref opt_version, "Display version number", null },
             { "background-update", 0, 0, OptionArg.NONE, ref opt_background_update, "Run background update check", null },
             { "update-all", 0, 0, OptionArg.NONE, ref opt_update_all, "Update all installed apps and exit", null },
             { "update-check", 0, 0, OptionArg.NONE, ref opt_update_check, "List available updates and exit", null },
-            { "install", 0, OptionFlags.HIDDEN, OptionArg.FILENAME, ref opt_install, null, "PATH" },
-            { "keep-both", 0, 0, OptionArg.NONE, ref opt_keep_both, "With install: keep the existing app and install side by side", null },
-            { "uninstall", 0, OptionFlags.HIDDEN, OptionArg.STRING, ref opt_uninstall, null, "PATH" },
-            { "is-installed", 0, 0, OptionArg.FILENAME, ref opt_is_installed, "Check if an AppImage is installed", "PATH" },
+            { "install", 0, OptionFlags.HIDDEN, OptionArg.FILENAME, null, null, "PATH" },
+            { "keep-both", 0, 0, OptionArg.NONE, null, "With install: keep the existing app and install side by side", null },
+            { "uninstall", 0, OptionFlags.HIDDEN, OptionArg.STRING, null, null, "PATH" },
+            { "is-installed", 0, 0, OptionArg.FILENAME, null, "Check if an AppImage is installed", "PATH" },
             { null }
         };
         
