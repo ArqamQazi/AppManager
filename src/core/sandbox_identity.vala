@@ -124,11 +124,37 @@ namespace AppManager.Core {
                 if (basename.has_suffix(".desktop")) {
                     basename = basename.substring(0, basename.length - ".desktop".length);
                 }
+                basename = strip_copy_suffix(basename, record.copy_index);
                 if (is_ownable_bus_name(basename)) {
                     names.add(basename);
                 }
             }
             return names.to_array();
+        }
+
+        // A side-by-side copy's desktop file is "<name>-N", or "<name>-N-i" when
+        // unique_path() had to step aside, but the app inside still claims <name>.
+        private static string strip_copy_suffix(string stem, int copy_index) {
+            if (copy_index < 2) {
+                return stem;
+            }
+            var marker = "-%d".printf(copy_index);
+            var result = stem;
+            var dash = result.last_index_of_char('-');
+            if (!result.has_suffix(marker) && dash > 0 && result.substring(0, dash).has_suffix(marker)) {
+                var tail = result.substring(dash + 1);
+                bool digits = tail.length > 0;
+                for (int i = 0; i < tail.length && digits; i++) {
+                    digits = tail[i].isdigit();
+                }
+                if (digits) {
+                    result = result.substring(0, dash);
+                }
+            }
+            if (result.has_suffix(marker)) {
+                result = result.substring(0, result.length - marker.length);
+            }
+            return result;
         }
 
         // Names no app gets to claim through us, whatever its desktop entry is called.
