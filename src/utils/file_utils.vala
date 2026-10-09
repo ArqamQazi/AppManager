@@ -68,10 +68,17 @@ namespace AppManager.Utils {
 
         public static void remove_dir_recursive(string path) {
             try {
-                if (!File.new_for_path(path).query_exists()) {
+                var file = File.new_for_path(path);
+                var type = file.query_file_type(FileQueryInfoFlags.NOFOLLOW_SYMLINKS);
+                if (type == FileType.UNKNOWN && !file.query_exists()) {
                     return;
                 }
-                var enumerator = File.new_for_path(path).enumerate_children("standard::name", FileQueryInfoFlags.NONE);
+                if (type != FileType.DIRECTORY) {
+                    file.delete(null);
+                    return;
+                }
+                var enumerator = file.enumerate_children(
+                    "standard::name,standard::type", FileQueryInfoFlags.NOFOLLOW_SYMLINKS);
                 FileInfo info;
                 while ((info = enumerator.next_file()) != null) {
                     var child = enumerator.get_child(info);

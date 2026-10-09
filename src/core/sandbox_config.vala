@@ -49,6 +49,7 @@ namespace AppManager.Core {
             record.sandbox_allow_input = false;
             record.sandbox_allow_bluetooth = false;
             record.sandbox_allow_location = false;
+            record.sandbox_allow_network_info = false;
 
             record.sandbox_allow_documents = false;
             record.sandbox_allow_desktop = false;
@@ -86,6 +87,7 @@ namespace AppManager.Core {
                 && !r.sandbox_allow_input
                 && !r.sandbox_allow_bluetooth
                 && !r.sandbox_allow_location
+                && !r.sandbox_allow_network_info
                 && !r.sandbox_allow_documents
                 && !r.sandbox_allow_desktop
                 && !r.sandbox_allow_pictures
@@ -115,7 +117,7 @@ namespace AppManager.Core {
             return record.mode == InstallMode.PORTABLE
                 && record.installed_path != null
                 && record.installed_path.strip() != ""
-                && record.original_startup_wm_class != APPLICATION_ID;
+                && !record.is_self_app();
         }
 
         /**

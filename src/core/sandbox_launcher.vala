@@ -149,7 +149,8 @@ namespace AppManager.Core {
                 builder.system_bus_socket = proxy.system_socket;
                 builder.a11y_bus_socket = proxy.a11y_socket;
                 builder.sync_fd = proxy.sync_read_fd;
-            } else if (manifest.full_session_bus) {
+            }
+            if (manifest.full_session_bus) {
                 // No proxy to filter it, so the real accessibility socket - consistent
                 // with the session bus the user has already opened up here.
                 builder.a11y_bus_socket = SandboxDbusProxy.host_a11y_socket();

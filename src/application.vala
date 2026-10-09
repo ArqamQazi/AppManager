@@ -178,6 +178,38 @@ Examples:
             return -1;  // Continue processing
         }
 
+        private async void backfill_appstream_metadata() {
+            hold();
+            foreach (var record in registry.list()) {
+                if (record.appstream_checked || record.mode != InstallMode.PORTABLE) continue;
+                var id = record.id;
+                var path = record.installed_path;
+                var checksum = record.source_checksum;
+                var installed_at = record.installed_at;
+                string? appstream_id = null;
+                bool examined = false;
+                SourceFunc callback = backfill_appstream_metadata.callback;
+                new Thread<void>("appstream-backfill", () => {
+                    string? temp = null;
+                    try {
+                        temp = Utils.FileUtils.create_temp_dir("appstream-");
+                        var desktop = AppImageAssets.extract_desktop_entry(path, temp);
+                        var entry = new DesktopEntry(desktop);
+                        appstream_id = AppImageAssets.extract_appstream_id(path, temp, Path.get_basename(desktop), entry.name);
+                        examined = true;
+                    } catch (Error e) {
+                        debug("AppStream backfill for %s failed: %s", path, e.message);
+                    } finally {
+                        if (temp != null) Utils.FileUtils.remove_dir_recursive(temp);
+                    }
+                    Idle.add((owned) callback);
+                });
+                yield;
+                if (examined) registry.update_appstream_metadata(id, path, checksum, installed_at, appstream_id);
+            }
+            release();
+        }
+
         protected override void startup() {
             base.startup();
 
@@ -216,6 +248,7 @@ Examples:
                 }
             });
             directory_monitor.start();
+            backfill_appstream_metadata.begin();
             
             var quit_action = new GLib.SimpleAction("quit", null);
             quit_action.activate.connect(() => this.quit());

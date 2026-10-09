@@ -786,6 +786,11 @@ namespace AppManager {
                 record.sandbox_allow_location);
             services_group.add(location_row);
 
+            var network_info_row = build_permission_row(
+                _("Network information"), _("Read network status and interface information from NetworkManager."),
+                "network-workgroup-symbolic", record.sandbox_allow_network_info);
+            services_group.add(network_info_row);
+
             prefs_page.add(services_group);
 
             var folders_group = new Adw.PreferencesGroup();
@@ -876,6 +881,7 @@ namespace AppManager {
                 notifications_row.active = record.sandbox_allow_notifications;
                 tray_row.active          = record.sandbox_allow_tray;
                 location_row.active      = record.sandbox_allow_location;
+                network_info_row.active  = record.sandbox_allow_network_info;
                 downloads_row.active     = record.sandbox_allow_downloads;
                 documents_row.active     = record.sandbox_allow_documents;
                 desktop_row.active       = record.sandbox_allow_desktop;
@@ -994,6 +1000,7 @@ namespace AppManager {
                 record.sandbox_allow_notifications = notifications_row.active;
                 record.sandbox_allow_tray          = tray_row.active;
                 record.sandbox_allow_location      = location_row.active;
+                record.sandbox_allow_network_info  = network_info_row.active;
                 record.sandbox_allow_downloads     = downloads_row.active;
                 record.sandbox_allow_documents     = documents_row.active;
                 record.sandbox_allow_desktop       = desktop_row.active;
@@ -1099,6 +1106,7 @@ namespace AppManager {
             });
 
             network_row.notify["active"].connect(() => on_permission_toggled());
+            network_info_row.notify["active"].connect(() => on_permission_toggled());
             audio_row.notify["active"].connect(() => on_permission_toggled());
             x11_row.notify["active"].connect(() => on_permission_toggled());
             dbus_row.notify["active"].connect(() => on_permission_toggled());

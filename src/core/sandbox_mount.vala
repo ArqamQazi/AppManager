@@ -9,15 +9,16 @@ namespace AppManager.Core {
      * bound into the sandbox — the same approach flatpak takes with its own
      * deployments, and the reason /dev/fuse never has to be exposed.
      *
-     * Mount point: $XDG_RUNTIME_DIR/app-manager/mounts/<record-id>-<mtime>/mnt
+     * Mount point: $XDG_RUNTIME_DIR/app-manager/mounts-v2/<record-id>/<generation>/mnt
      *
      * The <mtime> in the path means an upgraded AppImage never collides with a stale
      * mount of the file it replaced. Everything lives under $XDG_RUNTIME_DIR, so a
      * mount orphaned by a killed supervisor disappears with the session.
      *
-     * Refcounting uses POSIX record locks on two files next to the mount point:
+     * Refcounting uses POSIX record locks, coordinated by a stable per-record guard:
      *
-     *   lock     - held exclusively while mounting or unmounting, so a launch
+     *   guard    - never removed; held exclusively before opening generation state,
+     *              mounting or unmounting, so a launch
      *              starting up can never interleave with one shutting down.
      *   holders  - each live launch holds a shared lock for its whole lifetime. A
      *              departing launch drops its own, then asks for an exclusive lock:
@@ -33,6 +34,7 @@ namespace AppManager.Core {
         public string mount_dir { get; private set; default = ""; }
 
         private string root = "";
+        private string guard_path = "";
         private int ref_fd = -1;
 
         /**
@@ -69,43 +71,40 @@ namespace AppManager.Core {
             }
 
             var self = new SandboxMount();
-            self.root = Path.build_filename(AppPaths.sandbox_runtime_dir, "mounts",
-                "%s-%ld".printf(record_id, (long) st.st_mtime));
+            // Versioned layout prevents old supervisors from sharing this lock protocol.
+            var record_root = Path.build_filename(AppPaths.sandbox_runtime_dir, "mounts-v2", record_id);
+            self.guard_path = Path.build_filename(record_root, "guard");
+            self.root = Path.build_filename(record_root,
+                "%ld-%llu-%lld".printf((long) st.st_mtime, (uint64) st.st_ino, (int64) st.st_size));
             self.mount_dir = Path.build_filename(self.root, "mnt");
-            if (DirUtils.create_with_parents(self.mount_dir, 0700) != 0) {
-                warning("Sandbox: cannot create mount point %s: %s",
-                    self.mount_dir, Posix.strerror(Posix.errno));
+            if (DirUtils.create_with_parents(record_root, 0700) != 0) {
+                warning("Sandbox: cannot create mount state %s: %s", record_root, Posix.strerror(Posix.errno));
                 return null;
             }
-
-            int guard = Posix.open(Path.build_filename(self.root, "lock"),
-                Posix.O_CREAT | Posix.O_RDWR, 0600);
-            if (guard < 0) {
-                warning("Sandbox: cannot open mount guard in %s: %s",
-                    self.root, Posix.strerror(Posix.errno));
-                return null;
-            }
-            set_lock(guard, Posix.F_WRLCK, true);
-
-            bool ok = true;
-            if (!is_mounted(self.mount_dir, self.root)) {
-                ok = mount_payload(driver, format, appimage_path, self.mount_dir, offset);
-            }
-
+            int guard = open_guard(self.guard_path, true);
+            if (guard < 0) return null;
+            cleanup_stale_generations(record_root, self.root);
+            bool ok = DirUtils.create_with_parents(self.mount_dir, 0700) == 0;
             if (ok) {
                 self.ref_fd = Posix.open(Path.build_filename(self.root, "holders"),
-                    Posix.O_CREAT | Posix.O_RDWR, 0600);
-                if (self.ref_fd < 0) {
-                    warning("Sandbox: cannot open mount refcount in %s: %s",
-                        self.root, Posix.strerror(Posix.errno));
-                    ok = false;
-                } else {
-                    // Shared: any number of launches may hold this at once.
-                    set_lock(self.ref_fd, Posix.F_RDLCK, true);
+                    Posix.O_CREAT | Posix.O_RDWR | Posix.O_CLOEXEC, 0600);
+                ok = self.ref_fd >= 0 && set_lock(self.ref_fd, Posix.F_RDLCK, true);
+            }
+            if (ok && !is_mounted(self.mount_dir, self.root)) {
+                ok = mount_payload(driver, format, appimage_path, self.mount_dir, offset);
+            }
+            if (!ok) {
+                warning("Sandbox: could not acquire mount state in %s", self.root);
+                if (self.ref_fd >= 0) {
+                    set_lock(self.ref_fd, Posix.F_UNLCK, false);
+                    if (set_lock(self.ref_fd, Posix.F_WRLCK, false)) cleanup_generation(self.root);
+                    Posix.close(self.ref_fd);
+                    self.ref_fd = -1;
+                } else if (!is_mounted(self.mount_dir, self.root)) {
+                    // Nothing has opened generation state while we hold the guard.
+                    remove_empty_generation(self.root);
                 }
             }
-
-            set_lock(guard, Posix.F_UNLCK, false);
             Posix.close(guard);
             return ok ? self : null;
         }
@@ -119,17 +118,18 @@ namespace AppManager.Core {
                 return;
             }
 
-            int guard = Posix.open(Path.build_filename(root, "lock"), Posix.O_RDWR, 0600);
-            if (guard >= 0) {
-                set_lock(guard, Posix.F_WRLCK, true);
+            int guard = open_guard(guard_path, false);
+            if (guard < 0) {
+                Posix.close(ref_fd);
+                ref_fd = -1;
+                return;
             }
 
             // Give up our own reference first: a process holding a shared lock is
             // granted an exclusive one for free, so the test below would always pass.
             set_lock(ref_fd, Posix.F_UNLCK, false);
             if (set_lock(ref_fd, Posix.F_WRLCK, false)) {
-                unmount(mount_dir);
-                set_lock(ref_fd, Posix.F_UNLCK, false);
+                cleanup_generation(root);
             } else {
                 debug("Sandbox: %s still in use, leaving it mounted", mount_dir);
             }
@@ -137,9 +137,53 @@ namespace AppManager.Core {
             Posix.close(ref_fd);
             ref_fd = -1;
 
-            if (guard >= 0) {
-                set_lock(guard, Posix.F_UNLCK, false);
-                Posix.close(guard);
+            Posix.close(guard);
+        }
+
+        private static int open_guard(string path, bool create) {
+            int fd = Posix.open(path, Posix.O_RDWR | Posix.O_CLOEXEC | (create ? Posix.O_CREAT : 0), 0600);
+            if (fd >= 0 && set_lock(fd, Posix.F_WRLCK, true)) return fd;
+            warning("Sandbox: cannot lock mount guard %s: %s", path, Posix.strerror(Posix.errno));
+            if (fd >= 0) Posix.close(fd);
+            return -1;
+        }
+
+        // Called only with the stable guard and exclusive holder lock. Never recurse
+        // into a payload: a busy or unexpectedly nonempty mount is left intact.
+        private static void cleanup_generation(string root) {
+            var mount_dir = Path.build_filename(root, "mnt");
+            if (is_mounted(mount_dir, root) && !unmount(mount_dir)) return;
+            if (!is_mounted(mount_dir, root)) remove_empty_generation(root);
+        }
+
+        private static void remove_empty_generation(string root) {
+            var mount_dir = Path.build_filename(root, "mnt");
+            if (Posix.rmdir(mount_dir) != 0 && Posix.errno != Posix.ENOENT) return;
+            Posix.unlink(Path.build_filename(root, "holders"));
+            Posix.rmdir(root);
+        }
+
+        private static void cleanup_stale_generations(string record_root, string current) {
+            try {
+                var entries = File.new_for_path(record_root).enumerate_children(
+                    "standard::name,standard::type", FileQueryInfoFlags.NOFOLLOW_SYMLINKS);
+                FileInfo? info = null;
+                int checked = 0;
+                while (checked < 16 && (info = entries.next_file()) != null) {
+                    if (info.get_file_type() != FileType.DIRECTORY) continue;
+                    var root = entries.get_child(info).get_path();
+                    if (root == current) continue;
+                    checked++;
+                    int fd = Posix.open(Path.build_filename(root, "holders"), Posix.O_RDWR | Posix.O_CLOEXEC, 0600);
+                    if (fd >= 0) {
+                        if (set_lock(fd, Posix.F_WRLCK, false)) cleanup_generation(root);
+                        Posix.close(fd);
+                    } else if (Posix.errno == Posix.ENOENT && !is_mounted(Path.build_filename(root, "mnt"), root)) {
+                        remove_empty_generation(root);
+                    }
+                }
+            } catch (Error e) {
+                debug("Sandbox: stale mount scan failed: %s", e.message);
             }
         }
 
@@ -191,7 +235,7 @@ namespace AppManager.Core {
             return true;
         }
 
-        private static void unmount(string mount_dir) {
+        private static bool unmount(string mount_dir) {
             // fusermount3 for libfuse3 (what current squashfuse and dwarfs link),
             // fusermount as the fallback for older installations.
             foreach (var tool in new string[] { "fusermount3", "fusermount" }) {
@@ -206,17 +250,18 @@ namespace AppManager.Core {
                         SpawnFlags.SEARCH_PATH, null, null, out err_str, out status);
                     if (status == 0) {
                         debug("Sandbox: unmounted %s", mount_dir);
-                        return;
+                        return !is_mounted(mount_dir, Path.get_dirname(mount_dir));
                     }
                     // EBUSY here means something outside our refcount is using the
                     // mount. Leaving it is harmless: it is in $XDG_RUNTIME_DIR.
                     debug("Sandbox: %s -u %s failed: %s", tool, mount_dir, (err_str ?? "").strip());
-                    return;
+                    return false;
                 } catch (SpawnError e) {
                     debug("Sandbox: cannot run %s: %s", tool, e.message);
                 }
             }
             debug("Sandbox: no fusermount available, leaving %s mounted", mount_dir);
+            return false;
         }
 
         /**

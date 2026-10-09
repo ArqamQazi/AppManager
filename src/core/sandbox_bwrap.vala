@@ -35,6 +35,7 @@ namespace AppManager.Core {
         private string mount_dir;
         private string home;
         private string runtime_base;
+        private bool chromium_compat;
         private Gee.ArrayList<string> args = new Gee.ArrayList<string>();
         // Read ends of pipes carrying generated file content. They must stay open
         // until bwrap has been started, and are closed by close_fds() afterwards.
@@ -65,6 +66,7 @@ namespace AppManager.Core {
             }
             args.add(bwrap);
             var argv0 = argv0_for(target);
+            chromium_compat = needs_no_sandbox();
 
             add_namespaces();
             add_host_root();
@@ -100,7 +102,7 @@ namespace AppManager.Core {
             args.add(Path.build_filename(mount_dir, "AppRun"));
             // Before the app's own arguments: a Chromium command line takes switches
             // anywhere, but an argument list ending in a URL reads better this way.
-            if (needs_no_sandbox()) {
+            if (chromium_compat) {
                 args.add("--no-sandbox");
             }
             foreach (var arg in app_args) {
@@ -320,8 +322,7 @@ namespace AppManager.Core {
                 var dest = Path.build_filename(home, rel);
                 ro_bind_try(SandboxConfig.canonicalize(dest), dest);
             }
-            add_cache_dir();
-            return true;
+            return add_cache_dir();
         }
 
         /**
@@ -346,17 +347,63 @@ namespace AppManager.Core {
          * Apps that put such files anywhere else (the data dir, $XDG_RUNTIME_DIR, /tmp)
          * are not helped by this; the real cure is not shadowing $HOME at all.
          */
-        private void add_cache_dir() {
+        private bool add_cache_dir() {
             var cache = host_cache_dir(manifest.app_id);
-            if (cache == null) {
-                return;
+            if (cache != null) {
+                if (DirUtils.create_with_parents(cache, 0700) != 0) {
+                    warning("Sandbox: cannot create %s: %s", cache, Posix.strerror(Posix.errno));
+                    return !chromium_compat;
+                }
+                add2("--bind", cache, cache);
+                setenv("XDG_CACHE_HOME", cache);
             }
-            if (DirUtils.create_with_parents(cache, 0700) != 0) {
-                warning("Sandbox: cannot create %s: %s", cache, Posix.strerror(Posix.errno));
-                return;
+            if (!chromium_compat) return true;
+            // Custom XDG_CACHE_HOME under the private home refers to its host backing.
+            var effective_cache = cache ?? Path.build_filename(home, ".cache");
+            foreach (var entry in manifest.env) {
+                if (!entry.has_prefix("XDG_CACHE_HOME=")) continue;
+                effective_cache = entry.substring("XDG_CACHE_HOME=".length);
             }
-            add2("--bind", cache, cache);
-            setenv("XDG_CACHE_HOME", cache);
+            if (!Path.is_absolute(effective_cache)) {
+                warning("Sandbox: Chromium requires an absolute XDG_CACHE_HOME override");
+                return false;
+            }
+            effective_cache = Filename.canonicalize(effective_cache);
+            if (effective_cache == cache) return create_namespace_marker(cache);
+            if (effective_cache.has_prefix(home + "/")) {
+                return create_namespace_marker(manifest.home, effective_cache.substring(home.length + 1));
+            }
+            warning("Sandbox: Chromium cache override %s is outside the private home and app cache", effective_cache);
+            return false;
+        }
+
+        private bool create_namespace_marker(string root, string relative_cache = "") {
+            // App-writable cache paths must not redirect this host-side write through
+            // a symlink. Anchor traversal to directory fds, including custom caches.
+            int dir = Posix.open(root, Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_NOFOLLOW | Posix.O_CLOEXEC);
+            foreach (var part in relative_cache.split("/")) {
+                if (part == "") continue;
+                if (dir < 0) break;
+                if (Posix.mkdirat(dir, part, 0700) != 0 && Posix.errno != Posix.EEXIST) {
+                    Posix.close(dir);
+                    dir = -1;
+                    break;
+                }
+                int next = Posix.openat(dir, part,
+                    Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_NOFOLLOW | Posix.O_CLOEXEC);
+                Posix.close(dir);
+                dir = next;
+            }
+            // pkgforge's 05-fix-namespaces.hook checks this before probing unshare.
+            int marker = dir < 0 ? -1 : Posix.openat(dir, ".disable-namespaces-check",
+                Posix.O_CREAT | Posix.O_WRONLY | Posix.O_NOFOLLOW | Posix.O_NONBLOCK | Posix.O_CLOEXEC, 0600);
+            Posix.Stat st = Posix.Stat();
+            bool ok = marker >= 0 && Posix.fstat(marker, out st) == 0 && Posix.S_ISREG(st.st_mode);
+            if (!ok) warning("Sandbox: cannot create Chromium namespace marker in %s/%s: %s",
+                root, relative_cache, Posix.strerror(Posix.errno));
+            if (marker >= 0) Posix.close(marker);
+            if (dir >= 0) Posix.close(dir);
+            return ok;
         }
 
         /**
@@ -799,10 +846,7 @@ namespace AppManager.Core {
                     add2("--ro-bind", socket, dest);
                     setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=%s".printf(dest));
                 }
-                return;
-            }
-
-            if (session_bus_socket != null) {
+            } else if (session_bus_socket != null) {
                 var dest = Path.build_filename(runtime_base, "bus");
                 add2("--ro-bind", session_bus_socket, dest);
                 setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=%s".printf(dest));

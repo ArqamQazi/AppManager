@@ -44,6 +44,7 @@ namespace AppManager.Core {
         public bool notifications = false;
         public bool tray = false;
         public bool location = false;
+        public bool network_info = false;
         public bool full_session_bus = false;
 
         public string[] xdg_dirs = new string[0];
@@ -76,6 +77,7 @@ namespace AppManager.Core {
             m.notifications = record.sandbox_allow_notifications;
             m.tray = record.sandbox_allow_tray;
             m.location = record.sandbox_allow_location;
+            m.network_info = record.sandbox_allow_network_info;
             m.full_session_bus = record.sandbox_allow_dbus;
 
             var dirs = new Gee.ArrayList<string>();
@@ -180,6 +182,7 @@ namespace AppManager.Core {
                 kf.set_boolean(GROUP_PERMISSIONS, "notifications", notifications);
                 kf.set_boolean(GROUP_PERMISSIONS, "tray", tray);
                 kf.set_boolean(GROUP_PERMISSIONS, "location", location);
+                kf.set_boolean(GROUP_PERMISSIONS, "network-info", network_info);
                 kf.set_boolean(GROUP_PERMISSIONS, "full-session-bus", full_session_bus);
 
                 kf.set_string_list(GROUP_FILESYSTEM, "xdg-dirs", xdg_dirs);
@@ -242,6 +245,7 @@ namespace AppManager.Core {
             m.notifications = read_bool(kf, GROUP_PERMISSIONS, "notifications", false);
             m.tray = read_bool(kf, GROUP_PERMISSIONS, "tray", false);
             m.location = read_bool(kf, GROUP_PERMISSIONS, "location", false);
+            m.network_info = read_bool(kf, GROUP_PERMISSIONS, "network-info", false);
             m.full_session_bus = read_bool(kf, GROUP_PERMISSIONS, "full-session-bus", false);
 
             m.xdg_dirs = read_list(kf, GROUP_FILESYSTEM, "xdg-dirs");
@@ -276,24 +280,26 @@ namespace AppManager.Core {
         /**
          * Whether the manifest asks for anything that needs a filtered bus: one of the
          * proxied services, or a bus name the app has to be able to claim. With
-         * full_session_bus on, the real socket is bound instead and no proxy is involved.
+         * full_session_bus on, the real session socket is bound instead; the system
+         * bus can still need its own filtered proxy.
          *
          * own_names is what keeps an ordinary app on a session bus. Without it a Strict
          * profile - every service toggle off - would get no bus at all, and no bus means
          * no DBUS_SESSION_BUS_ADDRESS under --clearenv.
          */
         public bool needs_bus_proxy() {
-            if (full_session_bus) {
-                return false;
-            }
-            return notifications || tray || bluetooth || location || own_names.length > 0;
+            return needs_session_bus() || needs_system_bus();
+        }
+
+        public bool needs_session_bus() {
+            return !full_session_bus && (notifications || tray || own_names.length > 0);
         }
 
         /**
-         * Whether the system bus half of the proxy is needed: BlueZ and GeoClue2.
+         * Whether a system proxy is needed: BlueZ, GeoClue2 or network information.
          */
         public bool needs_system_bus() {
-            return !full_session_bus && (bluetooth || location);
+            return bluetooth || location || network_info;
         }
 
         private static string read_string(KeyFile kf, string group, string key, string fallback) {

@@ -49,23 +49,20 @@ namespace AppManager.Core {
                 return null;
             }
 
-            var session_address = host_session_bus_address();
-            if (session_address == null) {
-                warning("Sandbox: no session bus address to proxy");
-                return null;
-            }
-
             var self = new SandboxDbusProxy();
-            self.session_socket = Path.build_filename(socket_dir, "%s-session".printf(instance_id));
-
             var args = new Gee.ArrayList<string>();
-            args.add(session_address);
-            args.add(self.session_socket);
-            // Without --filter the proxy forwards everything, which would make the
-            // whole exercise pointless. With it, the starting policy is "may talk to
-            // the bus daemon itself" and every rule below is an addition to that.
-            args.add("--filter");
-            args.add_all(session_rules(manifest));
+            if (manifest.needs_session_bus()) {
+                var session_address = host_session_bus_address();
+                if (session_address == null) {
+                    warning("Sandbox: no session bus address to proxy");
+                    return null;
+                }
+                self.session_socket = Path.build_filename(socket_dir, "%s-session".printf(instance_id));
+                args.add(session_address);
+                args.add(self.session_socket);
+                args.add("--filter");
+                args.add_all(session_rules(manifest));
+            }
 
             if (manifest.needs_system_bus()) {
                 self.system_socket = Path.build_filename(socket_dir, "%s-system".printf(instance_id));
@@ -76,7 +73,7 @@ namespace AppManager.Core {
             }
 
             var a11y_address = a11y_bus_address();
-            if (a11y_address != null) {
+            if (!manifest.full_session_bus && a11y_address != null) {
                 self.a11y_socket = Path.build_filename(socket_dir, "%s-a11y".printf(instance_id));
                 args.add(a11y_address);
                 args.add(self.a11y_socket);
@@ -260,8 +257,8 @@ namespace AppManager.Core {
         }
 
         /**
-         * System-bus rules. Only spawned at all when a toggle needs it; UPower and
-         * NetworkManager are deliberately not exposed.
+         * System-bus rules. Only spawned when a toggle needs it. NetworkManager has
+         * an information-only permission; UPower is not exposed.
          */
         private static Gee.ArrayList<string> system_rules(SandboxManifest manifest) {
             var rules = new Gee.ArrayList<string>();
@@ -271,6 +268,31 @@ namespace AppManager.Core {
             if (manifest.location) {
                 rules.add_all(geoclue_rules());
             }
+            if (manifest.network_info) {
+                rules.add_all(network_info_rules());
+            }
+            return rules;
+        }
+
+        public static Gee.ArrayList<string> network_info_rules() {
+            var rules = new Gee.ArrayList<string>();
+            const string service = "org.freedesktop.NetworkManager";
+            var root = "/org/freedesktop/NetworkManager";
+            // nm.dart initializes from the object manager, not GetDevices alone.
+            rules.add("--call=%s=org.freedesktop.DBus.ObjectManager.GetManagedObjects@/org/freedesktop".printf(service));
+            foreach (var member in new string[] { "InterfacesAdded", "InterfacesRemoved" }) {
+                rules.add("--broadcast=%s=org.freedesktop.DBus.ObjectManager.%s@/org/freedesktop".printf(service, member));
+            }
+            foreach (var path in new string[] { root, root + "/*" }) {
+                foreach (var member in new string[] { "Get", "GetAll" }) {
+                    rules.add("--call=%s=org.freedesktop.DBus.Properties.%s@%s".printf(service, member, path));
+                }
+                rules.add("--broadcast=%s=org.freedesktop.DBus.Properties.PropertiesChanged@%s".printf(service, path));
+            }
+            foreach (var member in new string[] { "GetDevices", "GetAllDevices", "GetDeviceByIpIface" }) {
+                rules.add("--call=%s=%s.%s@%s".printf(service, service, member, root));
+            }
+            // No Set, activation, Settings methods, secrets or wireless scans.
             return rules;
         }
 

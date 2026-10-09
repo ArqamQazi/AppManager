@@ -30,6 +30,8 @@ namespace AppManager.Core {
         public int copy_index { get; set; default = 0; }
         public string? version { get; set; }
         public string? description { get; set; }  // App description from metainfo <summary> or desktop Comment
+        public string? appstream_id { get; set; }
+        public bool appstream_checked { get; set; default = false; }
         public string? last_modified { get; set; }  // HTTP Last-Modified header for change detection
         public int64 content_length { get; set; default = 0; }  // HTTP Content-Length for change detection
         public string? last_release_tag { get; set; }  // Stores release tag_name for apps without version
@@ -97,7 +99,7 @@ namespace AppManager.Core {
         public bool sandbox_allow_network { get; set; default = true; }
         // Unfiltered session bus. Named "dbus" for serialization compatibility; the UI
         // calls it "Full session bus" because that is what granting it means - with it
-        // on, no bus proxy is used at all and the app can reach every desktop service.
+        // on, the session bus is unfiltered; system-bus permissions stay independent.
         public bool sandbox_allow_dbus { get; set; default = false; }
         public bool sandbox_allow_audio { get; set; default = true; }
         // Legacy X11 access. Defaults on: without it any app pinned to X11 fails to
@@ -121,6 +123,7 @@ namespace AppManager.Core {
         public bool sandbox_allow_tray { get; set; default = true; }
         // Location. Reaches GeoClue2 on the system bus through the filtered proxy.
         public bool sandbox_allow_location { get; set; default = false; }
+        public bool sandbox_allow_network_info { get; set; default = false; }
         // Stable sandbox identity, generated once when sandboxing is first enabled and
         // carried across upgrades: the compositor's security context and the sandbox
         // cache dir are keyed by it, so it must never change under an app.
@@ -142,6 +145,12 @@ namespace AppManager.Core {
             return sandbox_profile != null
                 && sandbox_profile != ""
                 && sandbox_profile != SANDBOX_PROFILE_OFF;
+        }
+
+        public bool is_self_app() {
+            return original_startup_wm_class == APPLICATION_ID
+                || (desktop_file != null
+                    && Path.get_basename(desktop_file) == APPLICATION_ID + ".desktop");
         }
 
         /**
@@ -167,6 +176,7 @@ namespace AppManager.Core {
             sandbox_allow_notifications = other.sandbox_allow_notifications;
             sandbox_allow_tray          = other.sandbox_allow_tray;
             sandbox_allow_location      = other.sandbox_allow_location;
+            sandbox_allow_network_info  = other.sandbox_allow_network_info;
             sandbox_allow_downloads     = other.sandbox_allow_downloads;
             sandbox_allow_documents     = other.sandbox_allow_documents;
             sandbox_allow_desktop       = other.sandbox_allow_desktop;
@@ -271,6 +281,9 @@ namespace AppManager.Core {
             builder.add_string_value(version ?? "");
             builder.set_member_name("description");
             builder.add_string_value(description ?? "");
+            builder.set_member_name("appstream_id");
+            builder.add_string_value(appstream_id ?? "");
+            put_bool(builder, "appstream_checked", appstream_checked);
             builder.set_member_name("last_modified");
             builder.add_string_value(last_modified ?? "");
             builder.set_member_name("content_length");
@@ -455,6 +468,7 @@ namespace AppManager.Core {
             put_bool(builder, "sandbox_allow_notifications", sandbox_allow_notifications);
             put_bool(builder, "sandbox_allow_tray", sandbox_allow_tray);
             put_bool(builder, "sandbox_allow_location", sandbox_allow_location);
+            put_bool(builder, "sandbox_allow_network_info", sandbox_allow_network_info);
             if (sandbox_app_id != null && sandbox_app_id.strip() != "") {
                 builder.set_member_name("sandbox_app_id");
                 builder.add_string_value(sandbox_app_id);
@@ -496,6 +510,7 @@ namespace AppManager.Core {
             sandbox_allow_notifications = read_bool(obj, "sandbox_allow_notifications", sandbox_allow_notifications);
             sandbox_allow_tray       = read_bool(obj, "sandbox_allow_tray", sandbox_allow_tray);
             sandbox_allow_location   = read_bool(obj, "sandbox_allow_location", sandbox_allow_location);
+            sandbox_allow_network_info = read_bool(obj, "sandbox_allow_network_info", false);
             if (obj.has_member("sandbox_app_id")) {
                 var app_id = obj.get_string_member("sandbox_app_id");
                 sandbox_app_id = (app_id != null && app_id.strip() != "") ? app_id.strip() : null;
@@ -550,6 +565,9 @@ namespace AppManager.Core {
             record.version = version == "" ? null : version;
             var description = obj.get_string_member_with_default("description", "");
             record.description = description == "" ? null : description;
+            var appstream_id = obj.get_string_member_with_default("appstream_id", "");
+            record.appstream_id = appstream_id == "" ? null : appstream_id;
+            record.appstream_checked = read_bool(obj, "appstream_checked", false);
             var last_modified = obj.get_string_member_with_default("last_modified", "");
             record.last_modified = last_modified == "" ? null : last_modified;
             record.content_length = (int64)obj.get_int_member_with_default("content_length", 0);

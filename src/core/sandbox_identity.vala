@@ -111,8 +111,8 @@ namespace AppManager.Core {
 
         /**
          * The bus names a record's app should be allowed to own, taken from its desktop
-         * entry's file name - which is what a GApplication uses as its application id
-         * by convention, and therefore the name it will try to claim.
+         * entry's file name and matched bundled AppStream metadata. GApplication
+         * conventionally uses these as the identity it will try to claim.
          *
          * Returns an empty list when nothing name-like can be derived, in which case
          * the app simply gets no --own rule.
@@ -128,6 +128,13 @@ namespace AppManager.Core {
                 if (is_ownable_bus_name(basename)) {
                     names.add(basename);
                 }
+            }
+            var appstream_id = (record.appstream_id ?? "").strip();
+            if (appstream_id.has_suffix(".desktop")) {
+                appstream_id = appstream_id.substring(0, appstream_id.length - ".desktop".length);
+            }
+            if (is_ownable_bus_name(appstream_id) && !names.contains(appstream_id)) {
+                names.add(appstream_id);
             }
             return names.to_array();
         }

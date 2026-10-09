@@ -1721,25 +1721,9 @@ namespace AppManager {
         private bool has_only_self_records(InstallationRecord[] records) {
             if (records.length == 0) return false;
             foreach (var rec in records) {
-                if (!is_self_app_record(rec)) return false;
+                if (!rec.is_self_app()) return false;
             }
             return true;
-        }
-
-        /**
-         * Heuristic: does this record look like AppManager itself?
-         * Checks the app name and desktop file path for "appmanager".
-         */
-        private bool is_self_app_record(InstallationRecord record) {
-            if (record.name != null) {
-                var name = record.name.strip().down().replace(" ", "").replace("-", "");
-                if (name.has_prefix("appmanager")) return true;
-            }
-            if (record.desktop_file != null &&
-                    record.desktop_file.down().contains("appmanager")) {
-                return true;
-            }
-            return false;
         }
 
         private string record_state_key(InstallationRecord record) {
