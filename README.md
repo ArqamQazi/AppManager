@@ -27,7 +27,7 @@ AppManager doesn't require FUSE to run, thanks to the [uruntime](https://github.
 - **Side-by-side installs**: Install multiple copies or versions of the same app; extra copies get a numbered suffix (e.g. `Bitwarden` and `Bitwarden 2`) with their own desktop entries and icons.
 - **Desktop integration**: Extracts the bundled `.desktop` file via `unsquashfs` or `dwarfsextract`, rewrites `Exec` and `Icon`, and stores it in `~/.local/share/applications`.
 - **Simple uninstall**: Right click in app drawer and choose `Move to Trash`, can uninstall in AppManager or simply delete from `~/Applications` folder.
-- **One-click installs from the web**: Registers the `x-scheme-handler/appmgr` handler, so an `appmgr://install?url=…&sha256=…` link on a store page (e.g. [AppHub](https://xlc-dev.github.io/apphub/)) downloads the AppImage - only over HTTPS, verified against the SHA-256 and size when the link carries them - and hands it to the normal install flow.
+- **One-click installs from the web**: Registers the `x-scheme-handler/appimg` handler, so an `appimg://install?url=…&sha256=…` link on a store page (e.g. [AppHub](https://xlc-dev.github.io/apphub/)) downloads the AppImage - only over HTTPS, verified against the SHA-256 and size when the link carries them - and hands it to the normal install flow.
 - **App library**: The main window lists installed apps with search, sorting and list or grid views. Changing the install folder in Preferences moves the installed apps along.
 - **Update sources**: zsync delta updates from the AppImage's embedded update info, GitHub and GitLab releases (optionally including pre-releases), or a plain download link checked for changes.
 - **Background app updates**: Optional automatic update checks with configurable interval (daily, weekly, monthly), notifications when updates are found, and optional automatic installs. Each run is written to an update log.
@@ -146,7 +146,7 @@ Run the tests with `meson test -C build`.
 - Check if installed: `app-manager --is-installed /path/to/app.AppImage`
 - Run the background update service (started by its autostart entry): `app-manager --background-update`
 - Show version or help: `app-manager --version` / `app-manager --help`
-- Open a web install link: `app-manager 'appmgr://install?url=https://host/App.AppImage&sha256=<hex>'`
+- Open a web install link: `app-manager 'appimg://install?url=https://host/App.AppImage&sha256=<hex>'`
 
 ## Translations
 
