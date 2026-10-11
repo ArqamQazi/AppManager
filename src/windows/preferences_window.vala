@@ -383,7 +383,7 @@ namespace AppManager {
 
             var default_sandbox_row = new Adw.SwitchRow();
             default_sandbox_row.title = _("Sandbox new apps by default");
-            default_sandbox_row.subtitle = _("New installations start on the Standard profile. Apps already installed are left alone.");
+            default_sandbox_row.subtitle = _("Apps outside AppHub start on the Standard profile. AppHub downloads use the store's sandbox template. Apps already installed are left alone.");
             default_sandbox_row.add_prefix(new Gtk.Image.from_icon_name("security-high-symbolic"));
             settings.bind("default-sandbox-enabled", default_sandbox_row, "active", GLib.SettingsBindFlags.DEFAULT);
             if (!AppPaths.sandbox_available) {

@@ -18,6 +18,7 @@ namespace AppManager {
         private HashSet<string> notified_stale_dirs = new HashSet<string>();
         // Temp dirs holding appimg:// downloads, removed on shutdown
         private HashSet<string> appimg_download_dirs = new HashSet<string>();
+        private HashMap<string, AppHubPolicy> appimg_policies = new HashMap<string, AppHubPolicy>();
         private static bool opt_version = false;
         private static bool opt_help = false;
         private static bool opt_background_update = false;
@@ -466,6 +467,7 @@ Examples:
         }
 
         private string appimg_progress_text(AppimgLink link) {
+            if (link.checking_policy) return _("Checking AppHub sandbox policy…");
             var received = link.received_bytes;
             var total = link.total_bytes;
             if (total > 0) {
@@ -512,11 +514,13 @@ Examples:
                 } else if (!cancelled) {
                     present_appimg_error(_("Download failed"), error.message);
                 }
-            } else if (window != null) {
-                window.download_completed(downloaded_path, link.sha256 != null);
             } else {
-                // The same window continues as the install prompt.
-                show_quick_install_dialog(downloaded_path, dialog);
+                if (link.sandbox_policy != null) appimg_policies.set(downloaded_path, link.sandbox_policy);
+                if (window != null) {
+                    window.download_completed(downloaded_path, link.sha256 != null || link.sandbox_policy != null, link.sandbox_policy);
+                } else {
+                    show_quick_install_dialog(downloaded_path, dialog);
+                }
             }
 
             this.release();
@@ -809,13 +813,14 @@ Examples:
             InstallationRecord? record = null;
             Error? error = null;
             bool upgraded = (existing != null);
+            var download_policy = appimg_policies.get(appimage_path);
 
             new Thread<void>("appmgr-quick-install", () => {
                 try {
                     if (existing != null) {
-                        record = installer.upgrade(staged_path, existing);
+                        record = installer.upgrade(staged_path, existing, download_policy);
                     } else {
-                        record = installer.install(staged_path, mode);
+                        record = installer.install(staged_path, mode, download_policy);
                     }
                 } catch (Error e) {
                     error = e;

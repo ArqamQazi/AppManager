@@ -43,9 +43,21 @@ namespace AppManager.Core {
         public bool bluetooth = false;
         public bool notifications = false;
         public bool tray = false;
+        public bool media_controls = false;
+        public bool accessibility = false;
+        public string[] media_names = new string[0];
         public bool location = false;
         public bool network_info = false;
         public bool full_session_bus = false;
+        public bool imported_policy = false;
+        public string display = "legacy";
+        public bool share_processes = false;
+        public bool share_ipc = false;
+        public string session_bus_access = "legacy";
+        public string system_bus_access = "legacy";
+        public string[] session_rules = new string[0];
+        public string[] system_rules = new string[0];
+        public string[] extra_devices = new string[0];
 
         public string[] xdg_dirs = new string[0];
         public string[] extra_dirs = new string[0];
@@ -76,17 +88,28 @@ namespace AppManager.Core {
             m.bluetooth = record.sandbox_allow_bluetooth;
             m.notifications = record.sandbox_allow_notifications;
             m.tray = record.sandbox_allow_tray;
+            m.media_controls = record.sandbox_allow_media_controls;
+            m.accessibility = record.sandbox_allow_accessibility;
+            m.media_names = SandboxIdentity.media_names_for(record);
             m.location = record.sandbox_allow_location;
             m.network_info = record.sandbox_allow_network_info;
             m.full_session_bus = record.sandbox_allow_dbus;
+            m.imported_policy = record.sandbox_session_bus != null || record.sandbox_system_bus != null;
+            m.display = record.sandbox_display ?? "legacy";
+            m.share_processes = record.sandbox_share_processes;
+            m.share_ipc = record.sandbox_share_ipc;
+            m.session_bus_access = record.sandbox_session_bus ?? "legacy";
+            m.system_bus_access = record.sandbox_system_bus ?? "legacy";
+            m.session_rules = record.sandbox_session_rules ?? new string[0];
+            m.system_rules = record.sandbox_system_rules ?? new string[0];
+            m.extra_devices = record.sandbox_extra_devices ?? new string[0];
 
             var dirs = new Gee.ArrayList<string>();
-            if (record.sandbox_allow_downloads) dirs.add("downloads");
-            if (record.sandbox_allow_documents) dirs.add("documents");
-            if (record.sandbox_allow_desktop)   dirs.add("desktop");
-            if (record.sandbox_allow_pictures)  dirs.add("pictures");
-            if (record.sandbox_allow_videos)    dirs.add("videos");
-            if (record.sandbox_allow_music)     dirs.add("music");
+            foreach (var location in new string[] { "downloads", "documents", "desktop", "pictures", "videos", "music" }) {
+                int access = SandboxConfig.folder_access(record, location);
+                if (access > 0) dirs.add(location + (access == 1 ? ":ro" : ""));
+            }
+            foreach (var entry in record.sandbox_other_dirs ?? new string[0]) dirs.add(entry);
             m.xdg_dirs = dirs.to_array();
 
             // The app's own folders first, then the ones granted to every sandboxed
@@ -125,7 +148,19 @@ namespace AppManager.Core {
                 }
             }
             m.env = env_list.to_array();
-            m.own_names = SandboxIdentity.own_names_for(record);
+            // Application identity is automatic whenever a session proxy is in play:
+            // GApplication registration and single-instance handoff need it even when
+            // no service is declared. Its absence is what made some apps crash once a
+            // desktop service opened the filtered bus.
+            bool session_bus_reason = m.notifications || m.tray || m.media_controls
+                || m.accessibility || m.session_rules.length > 0;
+            var ownership = new Gee.ArrayList<string>();
+            if (session_bus_reason) {
+                foreach (var name in SandboxIdentity.own_names_for(record)) ownership.add(name);
+                if (record.apphub_id != null && SandboxIdentity.is_ownable_bus_name(record.apphub_id)
+                    && !ownership.contains(record.apphub_id)) ownership.add(record.apphub_id);
+            }
+            m.own_names = ownership.to_array();
             return m;
         }
 
@@ -171,6 +206,15 @@ namespace AppManager.Core {
                 kf.set_string(GROUP_SANDBOX, "appimage", appimage);
                 kf.set_string(GROUP_SANDBOX, "home", home);
                 kf.set_boolean(GROUP_SANDBOX, "terminal", terminal);
+                kf.set_boolean(GROUP_SANDBOX, "imported-policy", imported_policy);
+                kf.set_string(GROUP_PERMISSIONS, "display", display);
+                kf.set_boolean(GROUP_PERMISSIONS, "share-processes", share_processes);
+                kf.set_boolean(GROUP_PERMISSIONS, "share-ipc", share_ipc);
+                kf.set_string(GROUP_PERMISSIONS, "session-bus-access", session_bus_access);
+                kf.set_string(GROUP_PERMISSIONS, "system-bus-access", system_bus_access);
+                kf.set_string_list(GROUP_PERMISSIONS, "session-rules", session_rules);
+                kf.set_string_list(GROUP_PERMISSIONS, "system-rules", system_rules);
+                kf.set_string_list(GROUP_PERMISSIONS, "extra-devices", extra_devices);
 
                 kf.set_boolean(GROUP_PERMISSIONS, "network", network);
                 kf.set_boolean(GROUP_PERMISSIONS, "audio", audio);
@@ -181,6 +225,9 @@ namespace AppManager.Core {
                 kf.set_boolean(GROUP_PERMISSIONS, "bluetooth", bluetooth);
                 kf.set_boolean(GROUP_PERMISSIONS, "notifications", notifications);
                 kf.set_boolean(GROUP_PERMISSIONS, "tray", tray);
+                kf.set_boolean(GROUP_PERMISSIONS, "media-controls", media_controls);
+                kf.set_boolean(GROUP_PERMISSIONS, "accessibility", accessibility);
+                kf.set_string_list(GROUP_PERMISSIONS, "media-names", media_names);
                 kf.set_boolean(GROUP_PERMISSIONS, "location", location);
                 kf.set_boolean(GROUP_PERMISSIONS, "network-info", network_info);
                 kf.set_boolean(GROUP_PERMISSIONS, "full-session-bus", full_session_bus);
@@ -223,7 +270,7 @@ namespace AppManager.Core {
                 warning("Sandbox manifest %s has no version", path);
                 return null;
             }
-            if (m.version > SANDBOX_MANIFEST_VERSION) {
+            if (m.version < 1 || m.version > SANDBOX_MANIFEST_VERSION) {
                 warning("Sandbox manifest %s is version %d, this build understands %d",
                     path, m.version, SANDBOX_MANIFEST_VERSION);
                 return null;
@@ -234,6 +281,15 @@ namespace AppManager.Core {
             m.appimage = read_string(kf, GROUP_SANDBOX, "appimage", "");
             m.home = read_string(kf, GROUP_SANDBOX, "home", "");
             m.terminal = read_bool(kf, GROUP_SANDBOX, "terminal", false);
+            m.imported_policy = read_bool(kf, GROUP_SANDBOX, "imported-policy", false);
+            m.display = read_string(kf, GROUP_PERMISSIONS, "display", "legacy");
+            m.share_processes = read_bool(kf, GROUP_PERMISSIONS, "share-processes", false);
+            m.share_ipc = read_bool(kf, GROUP_PERMISSIONS, "share-ipc", false);
+            m.session_bus_access = read_string(kf, GROUP_PERMISSIONS, "session-bus-access", "legacy");
+            m.system_bus_access = read_string(kf, GROUP_PERMISSIONS, "system-bus-access", "legacy");
+            m.session_rules = read_list(kf, GROUP_PERMISSIONS, "session-rules");
+            m.system_rules = read_list(kf, GROUP_PERMISSIONS, "system-rules");
+            m.extra_devices = read_list(kf, GROUP_PERMISSIONS, "extra-devices");
 
             m.network = read_bool(kf, GROUP_PERMISSIONS, "network", false);
             m.audio = read_bool(kf, GROUP_PERMISSIONS, "audio", false);
@@ -244,15 +300,55 @@ namespace AppManager.Core {
             m.bluetooth = read_bool(kf, GROUP_PERMISSIONS, "bluetooth", false);
             m.notifications = read_bool(kf, GROUP_PERMISSIONS, "notifications", false);
             m.tray = read_bool(kf, GROUP_PERMISSIONS, "tray", false);
+            m.media_controls = read_bool(kf, GROUP_PERMISSIONS, "media-controls", m.version < 3 && m.tray);
+            m.media_names = read_list(kf, GROUP_PERMISSIONS, "media-names");
             m.location = read_bool(kf, GROUP_PERMISSIONS, "location", false);
             m.network_info = read_bool(kf, GROUP_PERMISSIONS, "network-info", false);
             m.full_session_bus = read_bool(kf, GROUP_PERMISSIONS, "full-session-bus", false);
+            m.accessibility = read_bool(kf, GROUP_PERMISSIONS, "accessibility", m.version < 3 && (m.session_bus_access == "legacy" || m.full_session_bus));
 
             m.xdg_dirs = read_list(kf, GROUP_FILESYSTEM, "xdg-dirs");
             m.extra_dirs = read_list(kf, GROUP_FILESYSTEM, "extra");
             m.env = read_list(kf, GROUP_SANDBOX, "env");
             m.own_names = read_list(kf, GROUP_SANDBOX, "own-names");
+            if (!(m.display in new string[] { "legacy", "none", "wayland", "x11", "wayland-or-x11" })
+                || !(m.session_bus_access in new string[] { "legacy", "none", "filtered", "full" })
+                || !(m.system_bus_access in new string[] { "legacy", "none", "filtered", "full" })
+                || (m.imported_policy && m.version < 2)
+                || !valid_rules(m.session_rules) || !valid_rules(m.system_rules)) {
+                warning("Sandbox manifest %s contains an unsupported policy value", path);
+                return null;
+            }
+            foreach (var device in m.extra_devices) {
+                if (!(device in new string[] { "usb", "serial", "optical", "kvm" })) {
+                    warning("Sandbox manifest %s contains an unsupported device category", path);
+                    return null;
+                }
+            }
+            foreach (var name in m.media_names) {
+                if (!AppHubPolicy.valid_media_name(name)) {
+                    warning("Sandbox manifest %s contains an invalid media ownership name", path);
+                    return null;
+                }
+            }
+            if (m.media_controls && m.media_names.length == 0) {
+                var legacy = new InstallationRecord(record_id, Path.get_basename(m.appimage), InstallMode.PORTABLE);
+                if (m.own_names.length > 0) legacy.desktop_file = m.own_names[0] + ".desktop";
+                m.media_names = SandboxIdentity.media_names_for(legacy);
+            }
             return m;
+        }
+
+        private static bool valid_rules(string[] rules) {
+            foreach (var rule in rules) {
+                int colon = rule.index_of_char(':');
+                if (colon <= 0) return false;
+                var access = rule.substring(0, colon);
+                var name = rule.substring(colon + 1);
+                if (!(access in new string[] { "see", "talk", "own" }) || !DBus.is_name(name) || name.has_prefix(":")) return false;
+                if (access == "own" && !SandboxIdentity.is_ownable_bus_name(name)) return false;
+            }
+            return true;
         }
 
         /**
@@ -292,14 +388,14 @@ namespace AppManager.Core {
         }
 
         public bool needs_session_bus() {
-            return !full_session_bus && (notifications || tray || own_names.length > 0);
+            return !full_session_bus && (notifications || tray || media_controls || (version >= 3 && accessibility) || own_names.length > 0 || session_rules.length > 0);
         }
 
         /**
          * Whether a system proxy is needed: BlueZ, GeoClue2 or network information.
          */
         public bool needs_system_bus() {
-            return bluetooth || location || network_info;
+            return system_bus_access != "full" && (bluetooth || location || network_info || system_rules.length > 0);
         }
 
         private static string read_string(KeyFile kf, string group, string key, string fallback) {

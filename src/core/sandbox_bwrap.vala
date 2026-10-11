@@ -64,6 +64,25 @@ namespace AppManager.Core {
             if (bwrap == null) {
                 return null;
             }
+            if (manifest.display != "legacy" && manifest.display != "none") {
+                bool wayland = use_wayland(manifest);
+                bool x11 = Environment.get_variable("DISPLAY") != null;
+                if ((manifest.display == "wayland" && !wayland)
+                    || (manifest.display == "x11" && !x11)
+                    || (manifest.display == "wayland-or-x11" && !wayland && !x11)) {
+                    warning("Sandbox: requested display %s is unavailable", manifest.display);
+                    return null;
+                }
+            }
+            if (manifest.imported_policy && manifest.full_session_bus && host_session_bus_socket() == null) {
+                warning("Sandbox: requested full session bus has no bindable socket");
+                return null;
+            }
+            if (manifest.system_bus_access == "full"
+                && socket_path_in(Environment.get_variable("DBUS_SYSTEM_BUS_ADDRESS") ?? "unix:path=/run/dbus/system_bus_socket") == null) {
+                warning("Sandbox: requested full system bus has no bindable socket");
+                return null;
+            }
             args.add(bwrap);
             var argv0 = argv0_for(target);
             chromium_compat = needs_no_sandbox();
@@ -81,6 +100,7 @@ namespace AppManager.Core {
             add_gpu();
             add_camera();
             add_input();
+            add_extra_devices();
             add_folders();
             add_buses();
             add_a11y_bus();
@@ -220,9 +240,16 @@ namespace AppManager.Core {
         // ── composition ─────────────────────────────────────────────────────────
 
         private void add_namespaces() {
-            add1("--unshare-all");
-            if (manifest.network) {
-                add1("--share-net");
+            if (!manifest.share_processes && !manifest.share_ipc) {
+                add1("--unshare-all");
+                if (manifest.network) add1("--share-net");
+            } else {
+                // bwrap has no --share-pid/--share-ipc undo for --unshare-all.
+                add1("--unshare-uts");
+                add1("--unshare-cgroup-try");
+                if (!manifest.share_processes) add1("--unshare-pid");
+                if (!manifest.share_ipc) add1("--unshare-ipc");
+                if (!manifest.network) add1("--unshare-net");
             }
             // Belt and braces on top of --unshare-all: without a user namespace of its
             // own the app cannot restructure its mounts, so it cannot mount its way out
@@ -305,7 +332,11 @@ namespace AppManager.Core {
                 return false;
             }
             add2("--bind", manifest.home, home);
+            add_host_appearance(home);
+            return add_cache_dir();
+        }
 
+        private void add_host_appearance(string destination_home) {
             // Theming, read-only, on top of the private home: without these the app
             // renders with the default GTK/Qt theme, fonts and cursor while everything
             // around it does not. Legacy dotfile locations are included because plenty
@@ -319,10 +350,9 @@ namespace AppManager.Core {
                 ".local/share/gnome-shell/extensions"
             };
             foreach (var rel in theme_paths) {
-                var dest = Path.build_filename(home, rel);
-                ro_bind_try(SandboxConfig.canonicalize(dest), dest);
+                var source = Path.build_filename(home, rel);
+                ro_bind_try(SandboxConfig.canonicalize(source), Path.build_filename(destination_home, rel));
             }
-            return add_cache_dir();
         }
 
         /**
@@ -442,11 +472,11 @@ namespace AppManager.Core {
 
             foreach (var name in new string[] {
                 "USER", "LOGNAME", "LANG", "LANGUAGE", "TERM", "COLORTERM",
-                "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS",
-                "XCURSOR_THEME", "XCURSOR_SIZE", "GTK_THEME", "QT_QPA_PLATFORMTHEME"
+                "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS"
             }) {
                 copy_env(name);
             }
+            foreach (var name in new string[] { "XCURSOR_THEME", "XCURSOR_SIZE", "GTK_THEME", "QT_QPA_PLATFORMTHEME" }) copy_env(name);
             foreach (var name in Environment.list_variables()) {
                 if (name.has_prefix("LC_")) {
                     copy_env(name);
@@ -469,7 +499,15 @@ namespace AppManager.Core {
             }
         }
 
+        public static bool use_wayland(SandboxManifest manifest) {
+            if (manifest.display == "none" || manifest.display == "x11") return false;
+            var name = Environment.get_variable("WAYLAND_DISPLAY") ?? "wayland-0";
+            if (!name.has_prefix("wayland-") || name.contains("/")) name = "wayland-0";
+            return GLib.FileUtils.test(Path.build_filename(AppPaths.sandbox_runtime_base, name), FileTest.EXISTS);
+        }
+
         private void add_wayland() {
+            if (!use_wayland(manifest)) return;
             if (wayland_socket != null) {
                 // A security-context socket stands in for the compositor's own, so the
                 // compositor can tell this client is sandboxed.
@@ -500,7 +538,8 @@ namespace AppManager.Core {
             // symlink-substitution race on the shared /tmp/.X11-unix directory.
             add("--tmpfs", "/tmp/.X11-unix");
 
-            if (!manifest.x11) {
+            if (!manifest.x11 || manifest.display == "none" || manifest.display == "wayland"
+                || (manifest.display == "wayland-or-x11" && use_wayland(manifest))) {
                 // Stated in both directions on purpose. Leaving DISPLAY and XAUTHORITY
                 // inherited but unbound is what made Electron apps pinned to X11 with
                 // --ozone-platform=x11 fail with "Authorization required" and no
@@ -781,15 +820,57 @@ namespace AppManager.Core {
             ro_bind_try("/sys/class/input", "/sys/class/input");
         }
 
+        private void add_extra_devices() {
+            foreach (var category in manifest.extra_devices) {
+                if (category == "usb") dev_bind_try("/dev/bus/usb", "/dev/bus/usb");
+                if (category == "kvm") dev_bind_try("/dev/kvm", "/dev/kvm");
+                if (category != "serial" && category != "optical") continue;
+                try {
+                    var dir = Dir.open("/dev");
+                    string? name;
+                    while ((name = dir.read_name()) != null) {
+                        bool selected = false;
+                        if (category == "serial") {
+                            foreach (var prefix in new string[] { "ttyUSB", "ttyACM", "ttyS", "ttyAMA", "ttyTHS" }) {
+                                if (name.has_prefix(prefix) && name.length > prefix.length && name[prefix.length].isdigit()) selected = true;
+                            }
+                        } else {
+                            selected = name.has_prefix("sr") && name.length > 2 && name[2].isdigit();
+                            if (name.has_prefix("sg") && name.length > 2 && name[2].isdigit()) {
+                                string type;
+                                if (GLib.FileUtils.get_contents("/sys/class/scsi_generic/" + name + "/device/type", out type)) selected = type.strip() == "5";
+                            }
+                        }
+                        if (selected) dev_bind_try("/dev/" + name, "/dev/" + name);
+                    }
+                } catch (Error e) {
+                    debug("Sandbox: device enumeration failed: %s", e.message);
+                }
+            }
+        }
+
         private void add_folders() {
+            string? host_home_access = null;
             foreach (var name in manifest.xdg_dirs) {
+                if (name == "home:ro" || name == "home:rw") host_home_access = name;
+            }
+            if (host_home_access != null) add2(host_home_access.has_suffix(":ro") ? "--ro-bind" : "--bind", home, home);
+            foreach (var name in manifest.xdg_dirs) {
+                bool read_only = name.has_suffix(":ro");
+                var location = (read_only || name.has_suffix(":rw")) ? name.substring(0, name.length - 3) : name;
+                if (location == "home") continue;
+                var flag = read_only ? "--ro-bind-try" : "--bind-try";
+                if (location == "removable-media") {
+                    foreach (var mount_base in new string[] { "/media", "/mnt", "/run/media" }) add2(flag, mount_base, mount_base);
+                    continue;
+                }
                 string requested;
-                var dir = xdg_dir_path(name.strip(), out requested);
+                var dir = xdg_dir_path(location.strip(), out requested);
                 if (dir == null) {
                     continue;
                 }
-                add2("--bind-try", dir, dir);
-                add_folder_alias("--bind-try", requested, dir);
+                add2(flag, dir, dir);
+                add_folder_alias(flag, requested, dir);
             }
 
             foreach (var entry in manifest.extra_dirs) {
@@ -805,6 +886,18 @@ namespace AppManager.Core {
                 // cannot see it" rather than "the app will not start".
                 add2(flag, path, path);
                 add_folder_alias(flag, requested, path);
+            }
+            if (host_home_access != null) {
+                // Host-home access must not remove the app's private writable storage.
+                var storage = "/run/app-manager-home";
+                add2("--bind", manifest.home, storage);
+                add_host_appearance(storage);
+                setenv("XDG_CONFIG_HOME", storage + "/.config");
+                setenv("XDG_DATA_HOME", storage + "/.local/share");
+                setenv("XDG_STATE_HOME", storage + "/.local/state");
+                var cache = host_cache_dir(manifest.app_id);
+                if (cache != null) add2("--bind", cache, cache);
+                else setenv("XDG_CACHE_HOME", storage + "/.cache");
             }
         }
 
@@ -829,6 +922,7 @@ namespace AppManager.Core {
             if (requested == resolved || !Path.is_absolute(requested)) {
                 return;
             }
+            if ("home:ro" in manifest.xdg_dirs || "home:rw" in manifest.xdg_dirs) return;
             // Never over the private home itself, which would undo it entirely.
             if (requested == home) {
                 return;
@@ -855,6 +949,14 @@ namespace AppManager.Core {
                 // Both spellings: some apps have /var/run baked in.
                 add2("--ro-bind", system_bus_socket, "/run/dbus/system_bus_socket");
                 add2("--ro-bind", system_bus_socket, "/var/run/dbus/system_bus_socket");
+            } else if (manifest.system_bus_access == "full") {
+                var address = Environment.get_variable("DBUS_SYSTEM_BUS_ADDRESS") ?? "unix:path=/run/dbus/system_bus_socket";
+                var socket = socket_path_in(address);
+                if (socket != null) {
+                    add2("--ro-bind", socket, "/run/dbus/system_bus_socket");
+                    add2("--ro-bind", socket, "/var/run/dbus/system_bus_socket");
+                    setenv("DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/run/dbus/system_bus_socket");
+                }
             }
         }
 
@@ -1030,6 +1132,8 @@ namespace AppManager.Core {
                 case "pictures":  which = UserDirectory.PICTURES; break;
                 case "videos":    which = UserDirectory.VIDEOS; break;
                 case "music":     which = UserDirectory.MUSIC; break;
+                case "public-share": which = UserDirectory.PUBLIC_SHARE; break;
+                case "templates": which = UserDirectory.TEMPLATES; break;
                 default:
                     debug("Sandbox: unknown XDG directory \"%s\"", name);
                     return null;

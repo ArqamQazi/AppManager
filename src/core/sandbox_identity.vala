@@ -136,6 +136,38 @@ namespace AppManager.Core {
             if (is_ownable_bus_name(appstream_id) && !names.contains(appstream_id)) {
                 names.add(appstream_id);
             }
+            var wm_class = record.original_startup_wm_class ?? "";
+            if (is_ownable_bus_name(wm_class) && !names.contains(wm_class)) names.add(wm_class);
+            return names.to_array();
+        }
+
+        public static string[] media_names_for(InstallationRecord record) {
+            var names = new Gee.ArrayList<string>();
+            foreach (var declared in record.sandbox_media_names ?? new string[0]) {
+                if (AppHubPolicy.valid_media_name(declared) && !names.contains(declared)) names.add(declared);
+            }
+            // Players commonly publish under a name derived from the application ID
+            // (Gapless: org.mpris.MediaPlayer2.com.github.neithern.g4music), which a
+            // declared display-name entry alone would not cover. Grant both.
+            foreach (var identity in own_names_for(record)) {
+                var name = "org.mpris.MediaPlayer2." + identity;
+                if (AppHubPolicy.valid_media_name(name) && !names.contains(name)) names.add(name);
+                var leaf = identity.substring(identity.last_index_of_char('.') + 1);
+                name = "org.mpris.MediaPlayer2." + leaf;
+                if (AppHubPolicy.valid_media_name(name) && !names.contains(name)) names.add(name);
+            }
+            // Display names are a common player suffix (Gapless), independent of
+            // the application ID (g4music). Secondary copies use the same suffix.
+            var title = record.original_name ?? record.name;
+            if (record.copy_index >= 2 && title.has_suffix(" %d".printf(record.copy_index))) {
+                title = title.substring(0, title.length - " %d".printf(record.copy_index).length);
+            }
+            var suffix = new StringBuilder();
+            foreach (var c in title.to_utf8()) {
+                if (c.isalnum() || c == '_' || c == '-') suffix.append_c(c);
+            }
+            var candidate = "org.mpris.MediaPlayer2." + suffix.str;
+            if (AppHubPolicy.valid_media_name(candidate) && !names.contains(candidate)) names.add(candidate);
             return names.to_array();
         }
 

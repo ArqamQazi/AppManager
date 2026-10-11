@@ -66,14 +66,14 @@ namespace AppManager.Core {
 
             if (manifest.needs_system_bus()) {
                 self.system_socket = Path.build_filename(socket_dir, "%s-system".printf(instance_id));
-                args.add("unix:path=/run/dbus/system_bus_socket");
+                args.add(Environment.get_variable("DBUS_SYSTEM_BUS_ADDRESS") ?? "unix:path=/run/dbus/system_bus_socket");
                 args.add(self.system_socket);
                 args.add("--filter");
                 args.add_all(system_rules(manifest));
             }
 
-            var a11y_address = a11y_bus_address();
-            if (!manifest.full_session_bus && a11y_address != null) {
+            var a11y_address = manifest.accessibility && !manifest.full_session_bus ? a11y_bus_address() : null;
+            if (a11y_address != null) {
                 self.a11y_socket = Path.build_filename(socket_dir, "%s-a11y".printf(instance_id));
                 args.add(a11y_address);
                 args.add(self.a11y_socket);
@@ -197,12 +197,17 @@ namespace AppManager.Core {
          * Session-bus rules. Everything not listed is refused, including the services
          * that make sandbox escape trivial - systemd's StartTransientUnit above all.
          */
-        private static Gee.ArrayList<string> session_rules(SandboxManifest manifest) {
+        public static Gee.ArrayList<string> session_rules(SandboxManifest manifest) {
             var rules = new Gee.ArrayList<string>();
+            add_exact_rules(rules, manifest.session_rules);
 
             // The app has to be able to claim its own bus name: a GApplication whose
             // name request is refused decides it is a secondary instance and quits.
+            // Both the exact name and its namespace are granted: the wildcard alone
+            // does not match the exact name, and the exact name alone refuses helpers
+            // that publish under a sub-name.
             foreach (var name in manifest.own_names) {
+                rules.add("--own=" + name);
                 rules.add("--own=%s.*".printf(name));
             }
 
@@ -213,12 +218,12 @@ namespace AppManager.Core {
             if (manifest.tray) {
                 rules.add("--talk=org.kde.StatusNotifierWatcher");
                 rules.add_all(status_notifier_item_names());
-                // MPRIS players pick their own suffix, which cannot be predicted from
-                // our app id, so the whole subtree is allowed. Squatting another
-                // player's name is the worst this permits, and it costs a media-key
-                // widget nothing to be wrong about which player is playing.
-                rules.add("--own=org.mpris.MediaPlayer2.*");
-                rules.add("--talk=org.mpris.MediaPlayer2.*");
+            }
+            if (manifest.media_controls) {
+                foreach (var name in manifest.media_names) {
+                    rules.add("--own=" + name);
+                    if (!name.has_suffix(".*")) rules.add("--own=" + name + ".*");
+                }
             }
 
             return rules;
@@ -262,6 +267,7 @@ namespace AppManager.Core {
          */
         private static Gee.ArrayList<string> system_rules(SandboxManifest manifest) {
             var rules = new Gee.ArrayList<string>();
+            add_exact_rules(rules, manifest.system_rules);
             if (manifest.bluetooth) {
                 rules.add("--talk=org.bluez");
             }
@@ -272,6 +278,16 @@ namespace AppManager.Core {
                 rules.add_all(network_info_rules());
             }
             return rules;
+        }
+
+        private static void add_exact_rules(Gee.ArrayList<string> output, string[] rules) {
+            foreach (var rule in rules) {
+                var colon = rule.index_of_char(':');
+                if (colon <= 0) continue;
+                var access = rule.substring(0, colon);
+                var name = rule.substring(colon + 1);
+                if (access in new string[] { "see", "talk", "own" }) output.add("--%s=%s".printf(access, name));
+            }
         }
 
         public static Gee.ArrayList<string> network_info_rules() {

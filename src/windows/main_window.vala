@@ -579,13 +579,16 @@ namespace AppManager {
                 
                 row.subtitle = build_row_subtitle(record);
 
-                // Add icon if available
-                if (record.icon_path != null && record.icon_path.strip() != "") {
-                    var icon_image = UiUtils.load_app_icon(record.icon_path);
-                    if (icon_image != null) {
-                        row.add_prefix(icon_image);
-                    }
+                var icon_image = record.icon_path != null && record.icon_path.strip() != ""
+                    ? UiUtils.load_app_icon(record.icon_path) : null;
+                if (icon_image == null) {
+                    icon_image = new Gtk.Image.from_icon_name("application-x-executable-symbolic");
+                    icon_image.pixel_size = 48;
                 }
+                var icon_box = new Gtk.Box(Gtk.Orientation.HORIZONTAL, 6);
+                icon_box.append(icon_image);
+                if (record.sandbox_enabled()) icon_box.append(UiUtils.sandbox_indicator());
+                row.add_prefix(icon_box);
 
                 // Make row activatable to show detail page
                 row.activatable = true;
@@ -696,7 +699,11 @@ namespace AppManager {
                 overlay.add_overlay(warn_icon);
             }
 
-            cell_box.append(overlay);
+            var icon_box = new Gtk.Box(Gtk.Orientation.HORIZONTAL, 6);
+            icon_box.halign = Gtk.Align.CENTER;
+            icon_box.append(overlay);
+            if (record.sandbox_enabled()) icon_box.append(UiUtils.sandbox_indicator());
+            cell_box.append(icon_box);
 
             // App name label (same size as list view)
             var name_label = new Gtk.Label(record.name ?? _("Unknown"));

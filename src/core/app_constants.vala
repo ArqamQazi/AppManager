@@ -15,6 +15,7 @@ namespace AppManager.Core {
     public const string SANDBOX_PROFILE_STANDARD = "standard";
     public const string SANDBOX_PROFILE_STRICT = "strict";
     public const string SANDBOX_PROFILE_CUSTOM = "custom";
+    public const string SANDBOX_PROFILE_APPHUB = "apphub";
 
     // Per-app sandbox manifests live in
     // <data_dir>/<SANDBOX_DIRNAME>/<record-id><SANDBOX_MANIFEST_SUFFIX>.
@@ -23,7 +24,7 @@ namespace AppManager.Core {
 
     // Manifest format revision. Bumped when a key's meaning changes; the launcher
     // refuses a manifest from a future version rather than guessing.
-    public const int SANDBOX_MANIFEST_VERSION = 1;
+    public const int SANDBOX_MANIFEST_VERSION = 4;
 
     // Prefix of the generated per-app sandbox identity - its Wayland security-context
     // app id and the key of its cache dir, e.g. io.appmanager.sandboxed.Inkscape.

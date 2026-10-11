@@ -27,7 +27,7 @@ AppManager doesn't require FUSE to run, thanks to the [uruntime](https://github.
 - **Side-by-side installs**: Install multiple copies or versions of the same app; extra copies get a numbered suffix (e.g. `Bitwarden` and `Bitwarden 2`) with their own desktop entries and icons.
 - **Desktop integration**: Extracts the bundled `.desktop` file via `unsquashfs` or `dwarfsextract`, rewrites `Exec` and `Icon`, and stores it in `~/.local/share/applications`.
 - **Simple uninstall**: Right click in app drawer and choose `Move to Trash`, can uninstall in AppManager or simply delete from `~/Applications` folder.
-- **One-click installs from the web**: Registers the `x-scheme-handler/appimg` handler, so an `appimg://install?url=…&sha256=…` link on a store page (e.g. [AppHub](https://xlc-dev.github.io/apphub/)) downloads the AppImage - only over HTTPS, verified against the SHA-256 and size when the link carries them - and hands it to the normal install flow.
+- **One-click installs from the web**: Registers the `x-scheme-handler/appimg` handler, so an `appimg://install?url=…&sha256=…` link downloads the AppImage over HTTPS and verifies the supplied SHA-256 and size. Downloads matching [AppHub](https://xlc-dev.github.io/apphub/)'s catalog receive the app's sandbox template; other downloads use your normal installation defaults.
 - **App library**: The main window lists installed apps with search, sorting and list or grid views. Changing the install folder in Preferences moves the installed apps along.
 - **Update sources**: zsync delta updates from the AppImage's embedded update info, GitHub and GitLab releases (optionally including pre-releases), or a plain download link checked for changes.
 - **Background app updates**: Optional automatic update checks with configurable interval (daily, weekly, monthly), notifications when updates are found, and optional automatic installs. Each run is written to an update log.
@@ -38,6 +38,10 @@ AppManager doesn't require FUSE to run, thanks to the [uruntime](https://github.
 ## Sandboxing
 
 Open an app's details, then **Privacy & Security**, and pick **Standard** or **Strict**. Standard keeps the network, sound, legacy X11, notifications, tray icons and the Downloads folder; Strict takes them away. Both keep hardware acceleration on, since software rendering makes most apps unusable without making them safer. Every switch can be changed on its own, which the profile then shows as **Custom**. To sandbox every newly installed app, or to grant a folder to all sandboxed apps at once, see **Preferences → Security & Privacy**.
+
+**AppHub installs use the store's per-app permissions automatically.** For example, Pinta gets no network or sound access, and Gapless gets read-only access to Music. The template is matched to the downloaded artifact's URL and SHA-256 before it is applied. Folder access can be Off, Read-only or Read and write; display access can select Wayland, X11 or neither. Manual permission changes are preserved across upgrades. A small shield next to an app's icon in list and grid views indicates that sandboxing is enabled. The Standard-default preference applies to apps outside AppHub.
+
+Policy retrieval failures stop installation rather than silently applying a broader template. FUSE-inside-sandbox grants are currently unsupported, so AppHub templates requiring them, such as Gear Lever's, are refused. Existing installations are not automatically converted to AppHub templates; a recognized AppHub download applies the template during installation or replacement.
 
 It needs `bubblewrap`, `xdg-dbus-proxy` and `fusermount3` on the host. `bwrap` and the proxy are not bundled, because `bwrap` is setuid on some distributions and the proxy links the host's glib. The `squashfuse` and `dwarfs` FUSE drivers are bundled in the AppImage. An app set to be sandboxed refuses to start when that tooling is missing, rather than starting unconfined.
 

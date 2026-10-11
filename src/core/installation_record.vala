@@ -32,6 +32,9 @@ namespace AppManager.Core {
         public string? description { get; set; }  // App description from metainfo <summary> or desktop Comment
         public string? appstream_id { get; set; }
         public bool appstream_checked { get; set; default = false; }
+        public string? apphub_id { get; set; }
+        public string? apphub_policy { get; set; }
+        public bool apphub_policy_customized { get; set; default = false; }
         public string? last_modified { get; set; }  // HTTP Last-Modified header for change detection
         public int64 content_length { get; set; default = 0; }  // HTTP Content-Length for change detection
         public string? last_release_tag { get; set; }  // Stores release tag_name for apps without version
@@ -119,8 +122,11 @@ namespace AppManager.Core {
         // org.freedesktop.Notifications access through the filtered session bus. The
         // only notification path there is, now that portals are gone.
         public bool sandbox_allow_notifications { get; set; default = true; }
-        // StatusNotifierItem tray icons and MPRIS media controls.
+        // StatusNotifierItem tray icons. Media controls are independent.
         public bool sandbox_allow_tray { get; set; default = true; }
+        public bool sandbox_allow_media_controls { get; set; default = true; }
+        public bool sandbox_allow_accessibility { get; set; default = true; }
+        public string[]? sandbox_media_names { get; set; }
         // Location. Reaches GeoClue2 on the system bus through the filtered proxy.
         public bool sandbox_allow_location { get; set; default = false; }
         public bool sandbox_allow_network_info { get; set; default = false; }
@@ -137,6 +143,17 @@ namespace AppManager.Core {
         // The issue #37 "manual override": extra paths the app may read. An entry
         // ending in ":rw" is granted write access too.
         public string[]? sandbox_extra_dirs { get; set; }
+        public string[]? sandbox_read_only_dirs { get; set; }
+        public string[]? sandbox_other_dirs { get; set; }
+        public string? sandbox_display { get; set; }
+        public bool sandbox_share_processes { get; set; default = false; }
+        public bool sandbox_share_ipc { get; set; default = false; }
+        // Null bus mode retains legacy semantic toggles and automatic own names.
+        public string? sandbox_session_bus { get; set; }
+        public string? sandbox_system_bus { get; set; }
+        public string[]? sandbox_session_rules { get; set; }
+        public string[]? sandbox_system_rules { get; set; }
+        public string[]? sandbox_extra_devices { get; set; }
 
         /**
          * True when this record should be launched through the sandbox.
@@ -175,6 +192,9 @@ namespace AppManager.Core {
             sandbox_allow_bluetooth     = other.sandbox_allow_bluetooth;
             sandbox_allow_notifications = other.sandbox_allow_notifications;
             sandbox_allow_tray          = other.sandbox_allow_tray;
+            sandbox_allow_media_controls = other.sandbox_allow_media_controls;
+            sandbox_allow_accessibility = other.sandbox_allow_accessibility;
+            sandbox_media_names = other.sandbox_media_names;
             sandbox_allow_location      = other.sandbox_allow_location;
             sandbox_allow_network_info  = other.sandbox_allow_network_info;
             sandbox_allow_downloads     = other.sandbox_allow_downloads;
@@ -184,6 +204,19 @@ namespace AppManager.Core {
             sandbox_allow_videos        = other.sandbox_allow_videos;
             sandbox_allow_music         = other.sandbox_allow_music;
             sandbox_extra_dirs          = other.sandbox_extra_dirs;
+            sandbox_read_only_dirs      = other.sandbox_read_only_dirs;
+            sandbox_other_dirs          = other.sandbox_other_dirs;
+            sandbox_display             = other.sandbox_display;
+            sandbox_share_processes     = other.sandbox_share_processes;
+            sandbox_share_ipc           = other.sandbox_share_ipc;
+            sandbox_session_bus         = other.sandbox_session_bus;
+            sandbox_system_bus          = other.sandbox_system_bus;
+            sandbox_session_rules       = other.sandbox_session_rules;
+            sandbox_system_rules        = other.sandbox_system_rules;
+            sandbox_extra_devices       = other.sandbox_extra_devices;
+            apphub_id                   = other.apphub_id;
+            apphub_policy               = other.apphub_policy;
+            apphub_policy_customized    = other.apphub_policy_customized;
         }
 
         public InstallationRecord(string id, string name, InstallMode mode) {
@@ -247,7 +280,7 @@ namespace AppManager.Core {
                    custom_no_display != null ||
                    custom_add_to_path != null ||
                    (custom_env_vars != null && custom_env_vars.length > 0) ||
-                   sandbox_enabled();
+                   (sandbox_extra_dirs != null && sandbox_extra_dirs.length > 0);
         }
 
         public Json.Node to_json() {
@@ -284,6 +317,11 @@ namespace AppManager.Core {
             builder.set_member_name("appstream_id");
             builder.add_string_value(appstream_id ?? "");
             put_bool(builder, "appstream_checked", appstream_checked);
+            builder.set_member_name("apphub_id");
+            builder.add_string_value(apphub_id ?? "");
+            builder.set_member_name("apphub_policy");
+            builder.add_string_value(apphub_policy ?? "");
+            put_bool(builder, "apphub_policy_customized", apphub_policy_customized);
             builder.set_member_name("last_modified");
             builder.add_string_value(last_modified ?? "");
             builder.set_member_name("content_length");
@@ -372,9 +410,8 @@ namespace AppManager.Core {
             builder.set_member_name("updates_enabled");
             builder.add_boolean_value(updates_enabled);
 
-            // The sandbox block goes into the registry as well as into the history
-            // file: history is only consulted on (re)install, so without this a
-            // sandboxed app would come back unsandboxed after a restart.
+            // Active sandbox state belongs to the registry. Reinstall history
+            // keeps only explicitly granted special folders.
             serialize_sandbox(builder);
 
             builder.end_object();
@@ -435,7 +472,7 @@ namespace AppManager.Core {
                 }
                 builder.end_array();
             }
-            serialize_sandbox(builder);
+            put_array(builder, "sandbox_extra_dirs", sandbox_extra_dirs);
         }
 
         private static void put_bool(Json.Builder builder, string key, bool value) {
@@ -448,15 +485,15 @@ namespace AppManager.Core {
         }
 
         /**
-         * Writes the sandbox block. Nothing is written for a record that isn't
-         * sandboxed, so turning the sandbox off leaves no state behind to restore.
+         * Writes active permissions or an explicit user override, including Off.
+         * Keeping Off and its special folders prevents defaults from undoing it.
          */
         private void serialize_sandbox(Json.Builder builder) {
-            if (!sandbox_enabled()) {
+            if (!sandbox_enabled() && !apphub_policy_customized) {
                 return;
             }
             builder.set_member_name("sandbox_profile");
-            builder.add_string_value(sandbox_profile);
+            builder.add_string_value(sandbox_profile ?? SANDBOX_PROFILE_OFF);
             put_bool(builder, "sandbox_allow_network", sandbox_allow_network);
             put_bool(builder, "sandbox_allow_dbus", sandbox_allow_dbus);
             put_bool(builder, "sandbox_allow_audio", sandbox_allow_audio);
@@ -467,8 +504,21 @@ namespace AppManager.Core {
             put_bool(builder, "sandbox_allow_bluetooth", sandbox_allow_bluetooth);
             put_bool(builder, "sandbox_allow_notifications", sandbox_allow_notifications);
             put_bool(builder, "sandbox_allow_tray", sandbox_allow_tray);
+            put_bool(builder, "sandbox_allow_media_controls", sandbox_allow_media_controls);
+            put_bool(builder, "sandbox_allow_accessibility", sandbox_allow_accessibility);
+            put_array(builder, "sandbox_media_names", sandbox_media_names);
             put_bool(builder, "sandbox_allow_location", sandbox_allow_location);
             put_bool(builder, "sandbox_allow_network_info", sandbox_allow_network_info);
+            put_bool(builder, "sandbox_share_processes", sandbox_share_processes);
+            put_bool(builder, "sandbox_share_ipc", sandbox_share_ipc);
+            put_string(builder, "sandbox_display", sandbox_display);
+            put_string(builder, "sandbox_session_bus", sandbox_session_bus);
+            put_string(builder, "sandbox_system_bus", sandbox_system_bus);
+            put_array(builder, "sandbox_read_only_dirs", sandbox_read_only_dirs);
+            put_array(builder, "sandbox_other_dirs", sandbox_other_dirs);
+            put_array(builder, "sandbox_session_rules", sandbox_session_rules);
+            put_array(builder, "sandbox_system_rules", sandbox_system_rules);
+            put_array(builder, "sandbox_extra_devices", sandbox_extra_devices);
             if (sandbox_app_id != null && sandbox_app_id.strip() != "") {
                 builder.set_member_name("sandbox_app_id");
                 builder.add_string_value(sandbox_app_id);
@@ -493,6 +543,28 @@ namespace AppManager.Core {
          * Reads the sandbox block. Absent keys keep their current value, so a
          * record written by an older version simply stays un-sandboxed.
          */
+        private static void put_string(Json.Builder builder, string key, string? value) {
+            if (value == null) return;
+            builder.set_member_name(key);
+            builder.add_string_value(value);
+        }
+
+        private static void put_array(Json.Builder builder, string key, string[]? values) {
+            if (values == null || values.length == 0) return;
+            builder.set_member_name(key);
+            builder.begin_array();
+            foreach (var value in values) builder.add_string_value(value);
+            builder.end_array();
+        }
+
+        private static string[]? read_array(Json.Object obj, string key) {
+            if (!obj.has_member(key)) return null;
+            var array = obj.get_array_member(key);
+            var values = new string[array.get_length()];
+            for (uint i = 0; i < array.get_length(); i++) values[i] = array.get_string_element(i);
+            return values;
+        }
+
         private void deserialize_sandbox(Json.Object obj) {
             if (!obj.has_member("sandbox_profile")) {
                 return;
@@ -509,8 +581,22 @@ namespace AppManager.Core {
             sandbox_allow_bluetooth  = read_bool(obj, "sandbox_allow_bluetooth", sandbox_allow_bluetooth);
             sandbox_allow_notifications = read_bool(obj, "sandbox_allow_notifications", sandbox_allow_notifications);
             sandbox_allow_tray       = read_bool(obj, "sandbox_allow_tray", sandbox_allow_tray);
+            // Older records combined tray/media and used implicit legacy a11y/ownership.
+            sandbox_allow_media_controls = read_bool(obj, "sandbox_allow_media_controls", sandbox_allow_tray);
+            sandbox_allow_accessibility = read_bool(obj, "sandbox_allow_accessibility", !obj.has_member("sandbox_session_bus") || sandbox_allow_dbus);
+            sandbox_media_names = read_array(obj, "sandbox_media_names");
             sandbox_allow_location   = read_bool(obj, "sandbox_allow_location", sandbox_allow_location);
             sandbox_allow_network_info = read_bool(obj, "sandbox_allow_network_info", false);
+            sandbox_share_processes = read_bool(obj, "sandbox_share_processes", false);
+            sandbox_share_ipc = read_bool(obj, "sandbox_share_ipc", false);
+            sandbox_display = obj.has_member("sandbox_display") ? obj.get_string_member("sandbox_display") : null;
+            sandbox_session_bus = obj.has_member("sandbox_session_bus") ? obj.get_string_member("sandbox_session_bus") : null;
+            sandbox_system_bus = obj.has_member("sandbox_system_bus") ? obj.get_string_member("sandbox_system_bus") : null;
+            sandbox_read_only_dirs = read_array(obj, "sandbox_read_only_dirs");
+            sandbox_other_dirs = read_array(obj, "sandbox_other_dirs");
+            sandbox_session_rules = read_array(obj, "sandbox_session_rules");
+            sandbox_system_rules = read_array(obj, "sandbox_system_rules");
+            sandbox_extra_devices = read_array(obj, "sandbox_extra_devices");
             if (obj.has_member("sandbox_app_id")) {
                 var app_id = obj.get_string_member("sandbox_app_id");
                 sandbox_app_id = (app_id != null && app_id.strip() != "") ? app_id.strip() : null;
@@ -568,6 +654,11 @@ namespace AppManager.Core {
             var appstream_id = obj.get_string_member_with_default("appstream_id", "");
             record.appstream_id = appstream_id == "" ? null : appstream_id;
             record.appstream_checked = read_bool(obj, "appstream_checked", false);
+            var apphub_id = obj.get_string_member_with_default("apphub_id", "");
+            record.apphub_id = apphub_id == "" ? null : apphub_id;
+            var apphub_policy = obj.get_string_member_with_default("apphub_policy", "");
+            record.apphub_policy = apphub_policy == "" ? null : apphub_policy;
+            record.apphub_policy_customized = read_bool(obj, "apphub_policy_customized", false);
             var last_modified = obj.get_string_member_with_default("last_modified", "");
             record.last_modified = last_modified == "" ? null : last_modified;
             record.content_length = (int64)obj.get_int_member_with_default("content_length", 0);
@@ -755,11 +846,9 @@ namespace AppManager.Core {
                 }
                 custom_env_vars = env_list;
             }
-            // Only adopt stored sandbox state when this record has none, so an
-            // explicit reset back to "off" is not undone by history.
-            if (sandbox_profile == null) {
-                deserialize_sandbox(obj);
-            }
+            // Profiles/toggles from older history must not override fresh defaults
+            // or store templates. Only Special permissions folders are restored.
+            if (sandbox_extra_dirs == null) sandbox_extra_dirs = read_array(obj, "sandbox_extra_dirs");
         }
 
         public static InstallMode parse_mode(string value) {

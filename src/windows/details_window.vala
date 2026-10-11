@@ -611,6 +611,7 @@ namespace AppManager {
             switch (record.sandbox_profile) {
                 case Core.SANDBOX_PROFILE_STANDARD: return _("Standard");
                 case Core.SANDBOX_PROFILE_STRICT:   return _("Strict");
+                case Core.SANDBOX_PROFILE_APPHUB:   return _("AppHub");
                 default:                            return _("Custom");
             }
         }
@@ -635,6 +636,25 @@ namespace AppManager {
                 var main_win = (MainWindow) this.get_root();
                 main_win.push_page(page);
             });
+            return row;
+        }
+
+        private const string[] SANDBOX_DISPLAY_ORDER = { "legacy", "wayland-or-x11", "wayland", "x11", "none" };
+
+        private int sandbox_display_index() {
+            var display = record.sandbox_display ?? (record.sandbox_allow_x11 ? "legacy" : "wayland");
+            for (int i = 0; i < SANDBOX_DISPLAY_ORDER.length; i++) {
+                if (SANDBOX_DISPLAY_ORDER[i] == display) return i;
+            }
+            return 0;
+        }
+
+        private Adw.ComboRow build_folder_permission_row(string title, string icon_name, string location) {
+            var row = new Adw.ComboRow();
+            row.title = title;
+            row.add_prefix(new Gtk.Image.from_icon_name(icon_name));
+            row.model = new Gtk.StringList({ _("Off"), _("Read-only"), _("Read and write") });
+            row.selected = Core.SandboxConfig.folder_access(record, location);
             return row;
         }
 
@@ -697,19 +717,30 @@ namespace AppManager {
             profile_group.title = _("Sandbox");
             profile_group.description = _("A sandboxed app gets its own home folder and cannot read the rest of yours. Standard keeps the network and sound working; Strict takes both away. Apps that need something you have not granted may fail to start or silently misbehave.");
 
-            // Combo entries are in SANDBOX_PROFILE_ORDER, so the selected index is the
-            // index of the stored profile name.
+            var profile_order = new Gee.ArrayList<string>();
+            foreach (var profile in SANDBOX_PROFILE_ORDER) profile_order.add(profile);
+            bool has_apphub = Core.SandboxConfig.has_apphub_profile(record);
+            if (has_apphub) profile_order.add(Core.SANDBOX_PROFILE_APPHUB);
             var profile_row = new Adw.ComboRow();
             profile_row.title = _("Profile");
             profile_row.add_prefix(new Gtk.Image.from_icon_name("security-high-symbolic"));
             profile_row.model = new Gtk.StringList({
                 _("Off"), _("Standard"), _("Strict"), _("Custom")
             });
+            if (has_apphub) ((Gtk.StringList) profile_row.model).append(_("AppHub"));
             profile_group.add(profile_row);
+            if (record.apphub_id != null) {
+                var source_row = new Adw.ActionRow();
+                source_row.title = _("AppHub sandbox template");
+                source_row.subtitle = record.apphub_id;
+                source_row.add_prefix(new Gtk.Image.from_icon_name("folder-download-symbolic"));
+                profile_group.add(source_row);
+            }
             prefs_page.add(profile_group);
 
             var access_group = new Adw.PreferencesGroup();
             access_group.title = _("Access");
+            var service_rows = new Gee.HashMap<string, Adw.SwitchRow>();
 
             var network_row = build_permission_row(
                 _("Network"), null, "network-wireless-symbolic", record.sandbox_allow_network);
@@ -722,12 +753,15 @@ namespace AppManager {
                 record.sandbox_allow_audio);
             access_group.add(audio_row);
 
-            var x11_row = build_permission_row(
-                _("Legacy X11"),
-                _("Needed by apps that have not moved to Wayland. Turning it off is safer, but such an app will not start."),
-                "video-display-symbolic",
-                record.sandbox_allow_x11);
-            access_group.add(x11_row);
+            var display_row = new Adw.ComboRow();
+            display_row.title = _("Display");
+            display_row.use_subtitle = true;
+            display_row.subtitle_lines = 0;
+            display_row.tooltip_text = _("Prefer Wayland when available; otherwise use X11.");
+            display_row.model = new Gtk.StringList({ _("Wayland and X11"), _("Prefer Wayland, otherwise X11"), _("Wayland only"), _("X11 only"), _("None") });
+            display_row.selected = sandbox_display_index();
+            display_row.add_prefix(new Gtk.Image.from_icon_name("video-display-symbolic"));
+            access_group.add(display_row);
 
             var dbus_row = build_permission_row(
                 _("Full session bus"),
@@ -763,7 +797,8 @@ namespace AppManager {
             devices_group.add(input_row);
 
             var bluetooth_row = build_permission_row(
-                _("Bluetooth"), null, "bluetooth-active-symbolic", record.sandbox_allow_bluetooth);
+                _("Bluetooth"), null, "bluetooth-active-symbolic", Core.SandboxConfig.service_enabled(record, "bluetooth"));
+            service_rows.set("bluetooth", bluetooth_row);
             devices_group.add(bluetooth_row);
 
             prefs_page.add(devices_group);
@@ -773,50 +808,115 @@ namespace AppManager {
 
             var notifications_row = build_permission_row(
                 _("Notifications"), null, "preferences-system-notifications-symbolic",
-                record.sandbox_allow_notifications);
+                Core.SandboxConfig.service_enabled(record, "notifications"));
+            service_rows.set("notifications", notifications_row);
             services_group.add(notifications_row);
 
-            var tray_row = build_permission_row(
-                _("System tray and media controls"), null, "view-pin-symbolic",
-                record.sandbox_allow_tray);
-            services_group.add(tray_row);
+            var accessibility_row = build_permission_row(
+                _("Accessibility"), _("Connect to the desktop accessibility service through a filtered bus."),
+                "preferences-desktop-accessibility-symbolic", Core.SandboxConfig.service_enabled(record, "accessibility"));
+            service_rows.set("accessibility", accessibility_row);
+            services_group.add(accessibility_row);
 
             var location_row = build_permission_row(
                 _("Location"), _("Reaches the system location service. AppManager alone enforces this - it does not appear in your desktop's location settings."), "find-location-symbolic",
-                record.sandbox_allow_location);
+                Core.SandboxConfig.service_enabled(record, "location"));
+            service_rows.set("location", location_row);
             services_group.add(location_row);
 
             var network_info_row = build_permission_row(
                 _("Network information"), _("Read network status and interface information from NetworkManager."),
-                "network-workgroup-symbolic", record.sandbox_allow_network_info);
+                "network-workgroup-symbolic", Core.SandboxConfig.service_enabled(record, "network-information"));
+            service_rows.set("network-information", network_info_row);
             services_group.add(network_info_row);
 
             prefs_page.add(services_group);
 
             var folders_group = new Adw.PreferencesGroup();
             folders_group.title = _("Folders");
-            folders_group.description = _("Folders the app may read and write. Everything else stays hidden, including anything you pick in a file dialog inside the app.");
+            folders_group.description = _("Folders shared with the app. Choose read-only or read and write access. Other folders stay hidden, including anything you pick in a file dialog inside the app.");
 
-            var downloads_row = build_permission_row(
-                _("Downloads"), null, "folder-download-symbolic", record.sandbox_allow_downloads);
+            var downloads_row = build_folder_permission_row(
+                _("Downloads"), "folder-download-symbolic", "downloads");
             folders_group.add(downloads_row);
-            var documents_row = build_permission_row(
-                _("Documents"), null, "folder-documents-symbolic", record.sandbox_allow_documents);
+            var documents_row = build_folder_permission_row(
+                _("Documents"), "folder-documents-symbolic", "documents");
             folders_group.add(documents_row);
-            var desktop_row = build_permission_row(
-                _("Desktop"), null, "user-desktop-symbolic", record.sandbox_allow_desktop);
+            var desktop_row = build_folder_permission_row(
+                _("Desktop"), "user-desktop-symbolic", "desktop");
             folders_group.add(desktop_row);
-            var pictures_row = build_permission_row(
-                _("Pictures"), null, "folder-pictures-symbolic", record.sandbox_allow_pictures);
+            var pictures_row = build_folder_permission_row(
+                _("Pictures"), "folder-pictures-symbolic", "pictures");
             folders_group.add(pictures_row);
-            var videos_row = build_permission_row(
-                _("Videos"), null, "folder-videos-symbolic", record.sandbox_allow_videos);
+            var videos_row = build_folder_permission_row(
+                _("Videos"), "folder-videos-symbolic", "videos");
             folders_group.add(videos_row);
-            var music_row = build_permission_row(
-                _("Music"), null, "folder-music-symbolic", record.sandbox_allow_music);
+            var music_row = build_folder_permission_row(
+                _("Music"), "folder-music-symbolic", "music");
             folders_group.add(music_row);
 
             prefs_page.add(folders_group);
+
+            var imported_group = new Adw.PreferencesGroup();
+            imported_group.title = _("Additional imported permissions");
+            imported_group.description = _("Access defined by the AppHub template. Choosing Standard or Strict replaces these permissions.");
+            var imported_rows = new Gee.ArrayList<Adw.ActionRow>();
+            void sync_imported_permissions() {
+                foreach (var row in imported_rows) imported_group.remove(row);
+                imported_rows.clear();
+                foreach (var rule in record.sandbox_session_rules ?? new string[0]) {
+                    var row = new Adw.ActionRow();
+                    row.title = rule;
+                    row.subtitle = _("Session bus");
+                    imported_group.add(row);
+                    imported_rows.add(row);
+                }
+                foreach (var rule in record.sandbox_system_rules ?? new string[0]) {
+                    var row = new Adw.ActionRow();
+                    row.title = rule;
+                    row.subtitle = _("System bus");
+                    imported_group.add(row);
+                    imported_rows.add(row);
+                }
+                if (record.sandbox_system_bus == "full") {
+                    var row = new Adw.ActionRow();
+                    row.title = _("Full system bus");
+                    imported_group.add(row);
+                    imported_rows.add(row);
+                }
+                foreach (var permission in record.sandbox_other_dirs ?? new string[0]) {
+                    var row = new Adw.ActionRow();
+                    row.title = permission;
+                    row.subtitle = _("Folders");
+                    imported_group.add(row);
+                    imported_rows.add(row);
+                }
+                foreach (var device in record.sandbox_extra_devices ?? new string[0]) {
+                    var row = new Adw.ActionRow();
+                    row.title = device;
+                    row.subtitle = _("Devices");
+                    imported_group.add(row);
+                    imported_rows.add(row);
+                }
+                if (record.sandbox_share_processes || record.sandbox_share_ipc) {
+                    var row = new Adw.ActionRow();
+                    row.title = record.sandbox_share_processes ? _("Host process access") : _("Host IPC access");
+                    if (record.sandbox_share_processes && record.sandbox_share_ipc) row.subtitle = _("Host IPC access");
+                    imported_group.add(row);
+                    imported_rows.add(row);
+                }
+                if (record.sandbox_allow_media_controls) {
+                    foreach (var name in record.sandbox_media_names ?? new string[0]) {
+                        var row = new Adw.ActionRow();
+                        row.title = name;
+                        row.subtitle = _("Media controls");
+                        imported_group.add(row);
+                        imported_rows.add(row);
+                    }
+                }
+            }
+            sync_imported_permissions();
+            prefs_page.add(imported_group);
 
             // The "manual override" of issue #37, as a list rather than a single slot:
             // anything outside the XDG set the app still needs - including the real target
@@ -859,8 +959,8 @@ namespace AppManager {
                 var current = record.sandbox_enabled()
                     ? (record.sandbox_profile ?? Core.SANDBOX_PROFILE_CUSTOM)
                     : Core.SANDBOX_PROFILE_OFF;
-                for (int i = 0; i < SANDBOX_PROFILE_ORDER.length; i++) {
-                    if (SANDBOX_PROFILE_ORDER[i] == current) {
+                for (int i = 0; i < profile_order.size; i++) {
+                    if (profile_order[i] == current) {
                         profile_row.selected = i;
                         break;
                     }
@@ -872,22 +972,21 @@ namespace AppManager {
                 suppress = true;
                 network_row.active       = record.sandbox_allow_network;
                 audio_row.active         = record.sandbox_allow_audio;
-                x11_row.active           = record.sandbox_allow_x11;
+                display_row.selected     = sandbox_display_index();
                 dbus_row.active          = record.sandbox_allow_dbus;
                 gpu_row.active           = record.sandbox_allow_gpu;
                 camera_row.active        = record.sandbox_allow_camera;
                 input_row.active         = record.sandbox_allow_input;
-                bluetooth_row.active     = record.sandbox_allow_bluetooth;
-                notifications_row.active = record.sandbox_allow_notifications;
-                tray_row.active          = record.sandbox_allow_tray;
-                location_row.active      = record.sandbox_allow_location;
-                network_info_row.active  = record.sandbox_allow_network_info;
-                downloads_row.active     = record.sandbox_allow_downloads;
-                documents_row.active     = record.sandbox_allow_documents;
-                desktop_row.active       = record.sandbox_allow_desktop;
-                pictures_row.active      = record.sandbox_allow_pictures;
-                videos_row.active        = record.sandbox_allow_videos;
-                music_row.active         = record.sandbox_allow_music;
+                foreach (var service in service_rows.keys) {
+                    service_rows.get(service).active = Core.SandboxConfig.service_enabled(record, service);
+                }
+                downloads_row.selected   = Core.SandboxConfig.folder_access(record, "downloads");
+                documents_row.selected   = Core.SandboxConfig.folder_access(record, "documents");
+                desktop_row.selected     = Core.SandboxConfig.folder_access(record, "desktop");
+                pictures_row.selected    = Core.SandboxConfig.folder_access(record, "pictures");
+                videos_row.selected      = Core.SandboxConfig.folder_access(record, "videos");
+                music_row.selected       = Core.SandboxConfig.folder_access(record, "music");
+                sync_imported_permissions();
                 suppress = false;
             }
 
@@ -907,7 +1006,17 @@ namespace AppManager {
                 access_group.visible = show_permissions;
                 devices_group.visible = show_permissions;
                 services_group.visible = show_permissions;
+                foreach (var service in service_rows.keys) {
+                    service_rows.get(service).sensitive = !Core.SandboxConfig.service_has_full_bus(record, service);
+                }
                 folders_group.visible = show_permissions;
+                imported_group.visible = show_permissions && (
+                    record.sandbox_share_processes || record.sandbox_share_ipc || record.sandbox_system_bus == "full"
+                    || (record.sandbox_allow_media_controls && record.sandbox_media_names != null && record.sandbox_media_names.length > 0)
+                    || (record.sandbox_other_dirs != null && record.sandbox_other_dirs.length > 0)
+                    || (record.sandbox_session_rules != null && record.sandbox_session_rules.length > 0)
+                    || (record.sandbox_system_rules != null && record.sandbox_system_rules.length > 0)
+                    || (record.sandbox_extra_devices != null && record.sandbox_extra_devices.length > 0));
                 extra_group.visible = show_permissions;
                 global_group.visible = show_permissions && global_dirs.length > 0;
 
@@ -920,7 +1029,8 @@ namespace AppManager {
                     : _("The AppImage runtime redirects the app's home and config into folders next to the AppImage, so its data travels with the file. A sandboxed app never runs that runtime, so this and the sandbox are alternatives.");
             }
 
-            void commit() {
+            void commit(bool permission_edit = true) {
+                if (permission_edit) record.apphub_policy_customized = record.sandbox_profile != Core.SANDBOX_PROFILE_APPHUB;
                 persist_record_and_refresh_desktop();
                 status_label.set_label(sandbox_status_label());
             }
@@ -960,7 +1070,7 @@ namespace AppManager {
                     extra_rows.remove(row);
                     relabel_profile();
                     sync_profile_row();
-                    commit();
+                    commit(false);
                 });
                 row.add_suffix(remove_button);
 
@@ -982,33 +1092,42 @@ namespace AppManager {
                 add_extra_row(path);
                 relabel_profile();
                 sync_profile_row();
-                commit();
+                commit(false);
             }
 
             void on_permission_toggled() {
                 if (suppress) {
                     return;
                 }
+                var previous_services = new Gee.HashMap<string, bool>();
+                foreach (var service in service_rows.keys) previous_services.set(service, Core.SandboxConfig.service_enabled(record, service));
                 record.sandbox_allow_network       = network_row.active;
                 record.sandbox_allow_audio         = audio_row.active;
-                record.sandbox_allow_x11           = x11_row.active;
+                if ((int) display_row.selected != sandbox_display_index()) {
+                    var display = SANDBOX_DISPLAY_ORDER[display_row.selected];
+                    record.sandbox_display = display == "legacy" ? null : display;
+                    record.sandbox_allow_x11 = display == "legacy" || display == "wayland-or-x11" || display == "x11";
+                }
+                if (record.sandbox_session_bus != null && record.sandbox_allow_dbus != dbus_row.active) {
+                    record.sandbox_session_bus = dbus_row.active ? "full" : "filtered";
+                }
                 record.sandbox_allow_dbus          = dbus_row.active;
                 record.sandbox_allow_gpu           = gpu_row.active;
                 record.sandbox_allow_camera        = camera_row.active;
                 record.sandbox_allow_input         = input_row.active;
-                record.sandbox_allow_bluetooth     = bluetooth_row.active;
-                record.sandbox_allow_notifications = notifications_row.active;
-                record.sandbox_allow_tray          = tray_row.active;
-                record.sandbox_allow_location      = location_row.active;
-                record.sandbox_allow_network_info  = network_info_row.active;
-                record.sandbox_allow_downloads     = downloads_row.active;
-                record.sandbox_allow_documents     = documents_row.active;
-                record.sandbox_allow_desktop       = desktop_row.active;
-                record.sandbox_allow_pictures      = pictures_row.active;
-                record.sandbox_allow_videos        = videos_row.active;
-                record.sandbox_allow_music         = music_row.active;
+                foreach (var service in service_rows.keys) {
+                    var active = service_rows.get(service).active;
+                    if (active != previous_services.get(service)) Core.SandboxConfig.set_service_access(record, service, active);
+                }
+                Core.SandboxConfig.set_folder_access(record, "downloads", (int) downloads_row.selected);
+                Core.SandboxConfig.set_folder_access(record, "documents", (int) documents_row.selected);
+                Core.SandboxConfig.set_folder_access(record, "desktop", (int) desktop_row.selected);
+                Core.SandboxConfig.set_folder_access(record, "pictures", (int) pictures_row.selected);
+                Core.SandboxConfig.set_folder_access(record, "videos", (int) videos_row.selected);
+                Core.SandboxConfig.set_folder_access(record, "music", (int) music_row.selected);
                 relabel_profile();
                 sync_profile_row();
+                sync_permission_rows();
                 update_sensitivity();
                 commit();
             }
@@ -1021,7 +1140,18 @@ namespace AppManager {
             update_sensitivity();
 
             void apply_profile(string picked) {
-                if (picked == Core.SANDBOX_PROFILE_CUSTOM) {
+                if (picked == Core.SANDBOX_PROFILE_APPHUB) {
+                    try {
+                        Core.SandboxConfig.restore_apphub_profile(record);
+                    } catch (Error e) {
+                        var error_dialog = new Adw.AlertDialog(_("Unable to restore the AppHub profile"), e.message);
+                        error_dialog.add_response("ok", _("OK"));
+                        error_dialog.present(this);
+                        sync_profile_row();
+                        return;
+                    }
+                    sync_permission_rows();
+                } else if (picked == Core.SANDBOX_PROFILE_CUSTOM) {
                     // Custom is a label, not a preset - keep the permissions as they are.
                     record.sandbox_profile = Core.SANDBOX_PROFILE_CUSTOM;
                 } else {
@@ -1030,7 +1160,7 @@ namespace AppManager {
                 }
                 sync_portable_rows();
                 update_sensitivity();
-                commit();
+                commit(picked != Core.SANDBOX_PROFILE_APPHUB);
             }
 
             profile_row.notify["selected"].connect(() => {
@@ -1038,10 +1168,10 @@ namespace AppManager {
                     return;
                 }
                 var index = profile_row.selected;
-                if (index >= SANDBOX_PROFILE_ORDER.length) {
+                if (index >= profile_order.size) {
                     return;
                 }
-                var picked = SANDBOX_PROFILE_ORDER[index];
+                var picked = profile_order[(int) index];
 
                 // Switching the sandbox on takes the app's portable data with it, since
                 // nothing would read it where it is. Only a sandboxed home that already
@@ -1106,23 +1236,19 @@ namespace AppManager {
             });
 
             network_row.notify["active"].connect(() => on_permission_toggled());
-            network_info_row.notify["active"].connect(() => on_permission_toggled());
             audio_row.notify["active"].connect(() => on_permission_toggled());
-            x11_row.notify["active"].connect(() => on_permission_toggled());
+            display_row.notify["selected"].connect(() => on_permission_toggled());
             dbus_row.notify["active"].connect(() => on_permission_toggled());
             gpu_row.notify["active"].connect(() => on_permission_toggled());
             camera_row.notify["active"].connect(() => on_permission_toggled());
             input_row.notify["active"].connect(() => on_permission_toggled());
-            bluetooth_row.notify["active"].connect(() => on_permission_toggled());
-            notifications_row.notify["active"].connect(() => on_permission_toggled());
-            tray_row.notify["active"].connect(() => on_permission_toggled());
-            location_row.notify["active"].connect(() => on_permission_toggled());
-            downloads_row.notify["active"].connect(() => on_permission_toggled());
-            documents_row.notify["active"].connect(() => on_permission_toggled());
-            desktop_row.notify["active"].connect(() => on_permission_toggled());
-            pictures_row.notify["active"].connect(() => on_permission_toggled());
-            videos_row.notify["active"].connect(() => on_permission_toggled());
-            music_row.notify["active"].connect(() => on_permission_toggled());
+            foreach (var row in service_rows.values) row.notify["active"].connect(() => on_permission_toggled());
+            downloads_row.notify["selected"].connect(() => on_permission_toggled());
+            documents_row.notify["selected"].connect(() => on_permission_toggled());
+            desktop_row.notify["selected"].connect(() => on_permission_toggled());
+            pictures_row.notify["selected"].connect(() => on_permission_toggled());
+            videos_row.notify["selected"].connect(() => on_permission_toggled());
+            music_row.notify["selected"].connect(() => on_permission_toggled());
 
             add_folder_button.clicked.connect(() => {
                 var dialog = new Gtk.FileDialog();

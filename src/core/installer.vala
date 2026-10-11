@@ -15,21 +15,23 @@ namespace AppManager.Core {
         private InstallationRegistry registry;
         private Settings settings;
         private string[] uninstall_prefix;
+        private AppHubFetch? policy_fetch;
 
         public signal void progress(string message);
 
-        public Installer(InstallationRegistry registry, Settings settings) {
+        public Installer(InstallationRegistry registry, Settings settings, owned AppHubFetch? policy_fetch = null) {
             this.registry = registry;
             this.settings = settings;
+            this.policy_fetch = (owned) policy_fetch;
             this.uninstall_prefix = resolve_uninstall_prefix();
         }
 
-        public InstallationRecord install(string file_path, InstallMode override_mode = InstallMode.PORTABLE) throws Error {
-            return install_sync(file_path, override_mode, null);
+        public InstallationRecord install(string file_path, InstallMode override_mode = InstallMode.PORTABLE, AppHubPolicy? policy = null) throws Error {
+            return install_sync(file_path, override_mode, null, policy);
         }
 
-        public InstallationRecord upgrade(string file_path, InstallationRecord old_record) throws Error {
-            return reinstall(file_path, old_record, old_record.mode);
+        public InstallationRecord upgrade(string file_path, InstallationRecord old_record, AppHubPolicy? policy = null) throws Error {
+            return reinstall(file_path, old_record, old_record.mode, policy);
         }
 
         /**
@@ -353,12 +355,33 @@ namespace AppManager.Core {
             return null;
         }
 
-        public InstallationRecord reinstall(string file_path, InstallationRecord old_record, InstallMode mode) throws Error {
+        public InstallationRecord reinstall(string file_path, InstallationRecord old_record, InstallMode mode, AppHubPolicy? policy = null) throws Error {
             // Validate new AppImage before touching the old installation.
             // Uses the same desktop/icon extraction that install does — if the
             // new package is corrupted or badly packed, we bail out here and
             // the currently installed version stays untouched.
             validate_appimage(file_path);
+            // Resolve before uninstall: a policy/network failure must leave the old
+            // installation usable. Uncatalogued upstream updates retain its policy.
+            var incoming_checksum = policy != null || old_record.apphub_id != null ? Utils.FileUtils.compute_checksum(file_path) : null;
+            // Parameters are borrowed; a freshly fetched template needs an owned
+            // local reference through the uninstall/reinstall sequence.
+            AppHubPolicy? resolved_policy = policy;
+            if (resolved_policy == null && old_record.apphub_id != null) {
+                resolved_policy = AppHubPolicy.resolve(null, incoming_checksum, old_record.apphub_id, null, policy_fetch);
+            }
+            if (resolved_policy != null && resolved_policy.sha256 != null && resolved_policy.sha256 != incoming_checksum) {
+                throw new AppHubPolicyError.ARTIFACT_MISMATCH(_("The AppHub sandbox policy could not be matched to this download."));
+            }
+            bool preserve_permissions = old_record.apphub_policy_customized
+                || (old_record.apphub_id == null && old_record.sandbox_profile != null);
+            if (!preserve_permissions && !old_record.is_self_app()) {
+                if (resolved_policy != null) validate_policy_install(mode);
+                else if (old_record.apphub_policy != null && old_record.apphub_id != null) {
+                    AppHubPolicy.parse(old_record.apphub_id, old_record.apphub_policy);
+                    validate_policy_install(mode);
+                }
+            }
 
             // Preserve portable folders only when staying in PORTABLE mode (user data survives upgrades).
             // When switching to EXTRACTED the folders serve no purpose and go along with the uninstall.
@@ -375,7 +398,7 @@ namespace AppManager.Core {
                     throw e;
                 }
             }
-            return install_sync(file_path, mode, old_record);
+            return install_sync(file_path, mode, old_record, resolved_policy);
         }
 
         /**
@@ -397,9 +420,17 @@ namespace AppManager.Core {
             }
         }
 
-        private InstallationRecord install_sync(string file_path, InstallMode override_mode, InstallationRecord? old_record) throws Error {
+        private void validate_policy_install(InstallMode mode) throws Error {
+            if (mode != InstallMode.PORTABLE) throw new InstallerError.UNKNOWN(_("AppHub sandbox policies require a portable installation."));
+            if (!AppPaths.sandbox_available) throw new InstallerError.UNKNOWN(_("Install bubblewrap to apply the AppHub sandbox policy."));
+        }
+
+        private InstallationRecord install_sync(string file_path, InstallMode override_mode, InstallationRecord? old_record, AppHubPolicy? policy = null) throws Error {
             var file = File.new_for_path(file_path);
             var metadata = new AppImageMetadata(file);
+            if (policy != null && policy.sha256 != null && policy.sha256 != metadata.checksum) {
+                throw new AppHubPolicyError.ARTIFACT_MISMATCH(_("The AppHub sandbox policy could not be matched to this download."));
+            }
 
             InstallMode mode = override_mode;
 
@@ -445,10 +476,19 @@ namespace AppManager.Core {
                 record.custom_add_to_path = old_record.custom_add_to_path;
                 record.prerelease_enabled = old_record.prerelease_enabled;
                 record.copy_sandbox_from(old_record);
+                // First catalog recognition must not replace existing non-store
+                // permissions, including configurations made by older builds.
+                if (policy != null && old_record.apphub_id == null && old_record.sandbox_profile != null) {
+                    record.apphub_policy_customized = true;
+                }
                 // Note: original_* values will be updated from the new AppImage's .desktop
             }
             // Note: For fresh installs, history is applied in finalize_desktop_and_icon()
             // after the app name is resolved from the .desktop file
+            if (policy != null) {
+                record.apphub_id = policy.app_id;
+                record.apphub_policy = policy.json;
+            }
 
             bool is_upgrade = (old_record != null);
 
@@ -838,19 +878,26 @@ namespace AppManager.Core {
                 // re-parsing already-modified Exec lines.
                 record.original_action_args = capture_action_args(desktop_entry);
 
+                if (record.apphub_policy != null && record.apphub_id != null
+                    && !record.apphub_policy_customized && !record.is_self_app()) {
+                    validate_policy_install(record.mode);
+                    AppHubPolicy.parse(record.apphub_id, record.apphub_policy).apply(record);
+                }
+
                 // Fresh-install default: opt in to the Standard profile when the user asked
-                // for it in Preferences and history left the sandbox unset. Placed after
+                // for it in Preferences. Special-folder history does not select a profile. Placed after
                 // original_startup_wm_class is known, since supports_record() uses it to keep
                 // AppManager from sandboxing itself.
                 if (!is_upgrade
                     && record.sandbox_profile == null
+                    && !record.apphub_policy_customized
                     && AppPaths.sandbox_available
                     && SandboxConfig.supports_record(record)
                     && settings.get_boolean("default-sandbox-enabled")) {
                     SandboxConfig.apply_preset(record, SANDBOX_PROFILE_STANDARD);
                 }
-                // Records restored from history can name a profile this install cannot honor
-                // (an extracted install, or AppManager itself). Drop it rather than emit an
+                // Carried active settings may be unsupported after a mode change or
+                // self-installation. Drop the profile rather than emit an
                 // Exec line pointing at a sandbox that will never work.
                 if (record.sandbox_enabled() && !SandboxConfig.supports_record(record)) {
                     record.sandbox_profile = null;
@@ -885,7 +932,12 @@ namespace AppManager.Core {
                 // The manifest's own-names come from desktop_file, and the manifest must
                 // exist before an Exec line pointing at sandbox-run does.
                 record.desktop_file = desktop_destination;
-                SandboxConfig.sync_manifest(record, registry.list());
+                if (record.sandbox_enabled() && (has_portable_home(record) || has_portable_config(record))) {
+                    migrate_portable_to_sandbox(record, false);
+                }
+                if (!SandboxConfig.sync_manifest(record, registry.list())) {
+                    throw new InstallerError.UNKNOWN(_("Unable to write the sandbox manifest."));
+                }
 
                 // Always write desktop file - custom values from JSON are applied via get_effective_*()
                 // The old desktop file is deleted during uninstall, so we must write the new one

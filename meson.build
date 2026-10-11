@@ -102,6 +102,7 @@ core_sources = files(
   'src/core/app_constants.vala',
   'src/core/app_paths.vala',
   'src/core/appimg_link.vala',
+  'src/core/apphub_policy.vala',
   'src/core/installation_record.vala',
   'src/core/installation_registry.vala',
   'src/core/custom_values_store.vala',

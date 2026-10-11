@@ -150,7 +150,7 @@ namespace AppManager.Core {
                 builder.a11y_bus_socket = proxy.a11y_socket;
                 builder.sync_fd = proxy.sync_read_fd;
             }
-            if (manifest.full_session_bus) {
+            if (manifest.full_session_bus && manifest.accessibility) {
                 // No proxy to filter it, so the real accessibility socket - consistent
                 // with the session bus the user has already opened up here.
                 builder.a11y_bus_socket = SandboxDbusProxy.host_a11y_socket();
@@ -159,7 +159,7 @@ namespace AppManager.Core {
             // Ask the compositor to treat this client as sandboxed. Its own socket is
             // bound only when the compositor has no such notion; when it does and the
             // handshake fails, Wayland is refused rather than handed over unrestricted.
-            var wayland = SandboxWaylandContext.create(manifest, instance_id);
+            var wayland = SandboxBwrap.use_wayland(manifest) ? SandboxWaylandContext.create(manifest, instance_id) : null;
             if (wayland != null) {
                 if (wayland.failed) {
                     printerr("%s: the compositor offers to sandbox this app's display connection, but setting that up failed; refusing to hand it an unrestricted one.\n",

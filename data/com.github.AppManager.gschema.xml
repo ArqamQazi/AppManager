@@ -99,7 +99,7 @@
     <key name="default-sandbox-enabled" type="b">
       <default>false</default>
       <summary>Sandbox newly installed apps by default</summary>
-      <description>When enabled, new installations start on the Standard sandbox profile. Existing apps are never changed.</description>
+      <description>When enabled, new installations outside AppHub start on the Standard sandbox profile. AppHub downloads use their verified store template. Existing apps are never changed by this setting.</description>
     </key>
     <key name="sandbox-global-dirs" type="as">
       <default>[]</default>
