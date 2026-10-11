@@ -14,7 +14,7 @@ namespace AppManager {
         private Gtk.Box empty_state_box;
         private Gtk.Label empty_state_label;
         private Gee.ArrayList<Adw.PreferencesRow> app_rows;
-        private Gtk.ShortcutsWindow? shortcuts_window;
+        private Adw.Dialog? shortcuts_window;
         private Adw.NavigationView navigation_view;
         private Adw.ToastOverlay toast_overlay;
         private Adw.BottomSheet bottom_sheet;
@@ -894,8 +894,7 @@ namespace AppManager {
             if (shortcuts_window == null) {
                 return;
             }
-            shortcuts_window.set_transient_for(this);
-            shortcuts_window.present();
+            shortcuts_window.present(this);
         }
 
         private GLib.MenuModel build_menu_model() {
@@ -1853,22 +1852,26 @@ namespace AppManager {
             try {
                 var builder = new Gtk.Builder();
                 builder.add_from_resource(SHORTCUTS_RESOURCE);
-                shortcuts_window = builder.get_object("shortcuts_window") as Gtk.ShortcutsWindow;
+                shortcuts_window = builder.get_object("shortcuts_window") as Adw.Dialog;
                 if (shortcuts_window == null) {
                     warning("Failed to create shortcuts window");
                     return;
                 }
-                shortcuts_window.set_transient_for(this);
+                shortcuts_window.title = _("Keyboard shortcuts");
+                // Adw.Dialog disposes its presentation window on close; rebuild on the next visit.
+                shortcuts_window.closed.connect(() => {
+                    shortcuts_window = null;
+                });
 
-                var section = builder.get_object("general_section") as Gtk.ShortcutsSection;
+                var section = builder.get_object("general_section") as Adw.PreferencesPage;
                 if (section != null) {
                     section.title = _("General");
                 }
-                var navigation = builder.get_object("navigation_group") as Gtk.ShortcutsGroup;
+                var navigation = builder.get_object("navigation_group") as Adw.PreferencesGroup;
                 if (navigation != null) {
                     navigation.title = _("Navigation");
                 }
-                var window_group = builder.get_object("window_group") as Gtk.ShortcutsGroup;
+                var window_group = builder.get_object("window_group") as Adw.PreferencesGroup;
                 if (window_group != null) {
                     window_group.title = _("Window");
                 }
@@ -1887,7 +1890,7 @@ namespace AppManager {
         }
 
         private void assign_shortcut_title(Gtk.Builder builder, string id, string title) {
-            var shortcut = builder.get_object(id) as Gtk.ShortcutsShortcut;
+            var shortcut = builder.get_object(id) as Adw.ActionRow;
             if (shortcut != null) {
                 shortcut.title = title;
             }

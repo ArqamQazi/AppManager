@@ -109,6 +109,7 @@ core_sources = files(
   'src/core/directory_monitor.vala',
   'src/core/app_image_metadata.vala',
   'src/core/app_image_assets.vala',
+  'src/core/fuse_support.vala',
   'src/core/appstream_identity.vala',
   'src/core/desktop_entry.vala',
   'src/core/installer.vala',

@@ -871,7 +871,7 @@ namespace AppManager {
             imported_group.title = _("Additional imported permissions");
             imported_group.description = _("Access defined by the AppHub template. Choosing Standard or Strict replaces these permissions.");
             var imported_rows = new Gee.ArrayList<Adw.ActionRow>();
-            void sync_imported_permissions() {
+            UpdateFunc sync_imported_permissions = () => {
                 foreach (var row in imported_rows) imported_group.remove(row);
                 imported_rows.clear();
                 foreach (var rule in record.sandbox_session_rules ?? new string[0]) {
@@ -924,7 +924,7 @@ namespace AppManager {
                         imported_rows.add(row);
                     }
                 }
-            }
+            };
             sync_imported_permissions();
             prefs_page.add(imported_group);
 
@@ -964,7 +964,7 @@ namespace AppManager {
 
             bool suppress = false;
 
-            void sync_profile_row() {
+            UpdateFunc sync_profile_row = () => {
                 suppress = true;
                 var current = record.sandbox_enabled()
                     ? (record.sandbox_profile ?? Core.SANDBOX_PROFILE_CUSTOM)
@@ -976,9 +976,9 @@ namespace AppManager {
                     }
                 }
                 suppress = false;
-            }
+            };
 
-            void sync_permission_rows() {
+            UpdateFunc sync_permission_rows = () => {
                 suppress = true;
                 network_row.active       = record.sandbox_allow_network;
                 audio_row.active         = record.sandbox_allow_audio;
@@ -998,16 +998,16 @@ namespace AppManager {
                 music_row.selected       = Core.SandboxConfig.folder_access(record, "music");
                 sync_imported_permissions();
                 suppress = false;
-            }
+            };
 
-            void sync_portable_rows() {
+            UpdateFunc sync_portable_rows = () => {
                 suppress = true;
                 portable_home_row.active = Installer.has_portable_home(record);
                 portable_config_row.active = Installer.has_portable_config(record);
                 suppress = false;
-            }
+            };
 
-            void update_sensitivity() {
+            UpdateFunc update_sensitivity = () => {
                 bool usable = supported && available;
                 profile_row.sensitive = usable;
                 // With the sandbox off there is nothing to configure, so the permission
@@ -1037,27 +1037,27 @@ namespace AppManager {
                 portable_group.description = sandboxed
                     ? _("Off while this app is sandboxed. The sandbox gives it a home folder of its own, and anything these folders held has been moved into that.")
                     : _("The AppImage runtime redirects the app's home and config into folders next to the AppImage, so its data travels with the file. A sandboxed app never runs that runtime, so this and the sandbox are alternatives.");
-            }
+            };
 
-            void commit(bool permission_edit = true) {
+            CommitFunc commit = (permission_edit) => {
                 if (permission_edit) record.apphub_policy_customized = record.sandbox_profile != Core.SANDBOX_PROFILE_APPHUB;
                 persist_record_and_refresh_desktop();
                 status_label.set_label(sandbox_status_label());
-            }
+            };
 
             // Re-label the profile so the combo reflects what the permissions now say.
             // Never applied with the sandbox off: detect_profile has no "off" answer and
             // would switch the sandbox on behind the user's back.
-            void relabel_profile() {
+            UpdateFunc relabel_profile = () => {
                 if (record.sandbox_enabled()) {
                     record.sandbox_profile = Core.SandboxConfig.detect_profile(record);
                 }
-            }
+            };
 
             // Extra-folder rows are added and removed one at a time rather than rebuilt
             // wholesale: a rebuild would have to be callable from the row handlers it
-            // creates, and Vala local functions cannot recurse into each other.
-            void add_extra_row(string path) {
+            // creates, introducing a cycle between the callbacks.
+            StringUpdateFunc add_extra_row = (path) => {
                 var row = new Adw.ActionRow();
                 row.title = Path.get_basename(path);
                 row.subtitle = path;
@@ -1086,9 +1086,9 @@ namespace AppManager {
 
                 extra_group.add(row);
                 extra_rows.add(row);
-            }
+            };
 
-            void add_extra_dir(string path) {
+            StringUpdateFunc add_extra_dir = (path) => {
                 var dirs = new Gee.ArrayList<string>();
                 foreach (var entry in record.sandbox_extra_dirs ?? new string[0]) {
                     // Adding the same folder twice would just repeat the bind.
@@ -1103,9 +1103,9 @@ namespace AppManager {
                 relabel_profile();
                 sync_profile_row();
                 commit(false);
-            }
+            };
 
-            void on_permission_toggled() {
+            UpdateFunc on_permission_toggled = () => {
                 if (suppress) {
                     return;
                 }
@@ -1139,8 +1139,8 @@ namespace AppManager {
                 sync_profile_row();
                 sync_permission_rows();
                 update_sensitivity();
-                commit();
-            }
+                commit(true);
+            };
 
             sync_profile_row();
             sync_portable_rows();
@@ -1149,7 +1149,7 @@ namespace AppManager {
             }
             update_sensitivity();
 
-            void apply_profile(string picked) {
+            StringUpdateFunc apply_profile = (picked) => {
                 if (picked == Core.SANDBOX_PROFILE_APPHUB) {
                     try {
                         Core.SandboxConfig.restore_apphub_profile(record);
@@ -1171,7 +1171,7 @@ namespace AppManager {
                 sync_portable_rows();
                 update_sensitivity();
                 commit(picked != Core.SANDBOX_PROFILE_APPHUB);
-            }
+            };
 
             profile_row.notify["selected"].connect(() => {
                 if (suppress) {
@@ -1207,9 +1207,9 @@ namespace AppManager {
             // The parent page's status reads "Portable" whenever one of these folders
             // exists, so it has to follow them. The record itself is untouched by a
             // folder appearing or going, so this never needs a full commit().
-            void refresh_status() {
+            UpdateFunc refresh_status = () => {
                 status_label.set_label(sandbox_status_label());
-            }
+            };
 
             portable_home_row.notify["active"].connect(() => {
                 if (suppress) {
@@ -1340,6 +1340,10 @@ namespace AppManager {
         private delegate void PortableRemoveFunc();
         private delegate void MigrationChoiceFunc(bool replace);
         private delegate void MigrationCancelFunc();
+        private delegate void UpdateFunc();
+        private delegate void CommitFunc(bool permission_edit);
+        private delegate void StringUpdateFunc(string value);
+        private delegate Adw.ActionRow EnvRowFunc(string? name, string? value, Gtk.Button add_button);
 
         /**
          * Asked when the portable folders and the sandboxed home both hold data, which
@@ -1404,7 +1408,7 @@ namespace AppManager {
             // Rebuild the record's env vars from current rows (in-memory only, no disk write).
             // Called on each keystroke while rows are alive; the .desktop write is deferred to
             // focus-leave / Enter via flush_env_vars(), which reads only the record.
-            void save_env_vars_from_rows() {
+            UpdateFunc save_env_vars_from_rows = () => {
                 var new_env_vars = new Gee.ArrayList<string>();
                 foreach (var widget in env_rows) {
                     if (widget is Adw.ActionRow) {
@@ -1435,16 +1439,16 @@ namespace AppManager {
                     }
                 }
                 record.custom_env_vars = new_env_vars.size > 0 ? new_env_vars.to_array() : null;
-            }
+            };
 
             // Flush the current record to disk. Reads only the record (never the row widgets),
             // so it is safe to call from focus-leave even during window teardown.
-            void flush_env_vars() {
+            UpdateFunc flush_env_vars = () => {
                 persist_record_and_refresh_desktop();
-            }
+            };
 
             // Create a row for a single env var
-            Adw.ActionRow create_env_var_row(string? initial_name, string? initial_value, Gtk.Button add_button) {
+            EnvRowFunc create_env_var_row = (initial_name, initial_value, add_button) => {
                 var row = new Adw.ActionRow();
                 
                 var content_box = new Gtk.Box(Gtk.Orientation.HORIZONTAL, 6);
@@ -1502,7 +1506,7 @@ namespace AppManager {
                 row.set_activatable(false);
                 
                 return row;
-            }
+            };
 
             // Add button row
             var add_row = new Adw.ActionRow();
@@ -1674,10 +1678,10 @@ namespace AppManager {
             version_row.changed.connect(() => {
                 record.version = version_row.text.strip() == "" ? null : version_row.text;
             });
-            void flush_version() {
+            UpdateFunc flush_version = () => {
                 registry.update(record);
                 installer.set_desktop_entry_property(record.desktop_file, "X-AppImage-Version", record.version ?? "");
-            }
+            };
             var version_focus = new Gtk.EventControllerFocus();
             version_focus.leave.connect(() => { flush_version(); });
             version_row.add_controller(version_focus);

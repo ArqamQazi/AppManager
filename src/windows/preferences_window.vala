@@ -337,6 +337,8 @@ namespace AppManager {
             return row;
         }
 
+        private delegate void ToggleDefaultFunc();
+
         /**
          * The Security & Privacy subpage: whether new installations are sandboxed, and
          * the folders every sandboxed app is granted on top of its own permissions.
@@ -403,7 +405,7 @@ namespace AppManager {
                 portable_config_row.active = false;
                 exclusive_suppress = false;
             });
-            void on_portable_default_toggled() {
+            ToggleDefaultFunc on_portable_default_toggled = () => {
                 if (exclusive_suppress
                     || !(portable_home_row.active || portable_config_row.active)) {
                     return;
@@ -411,7 +413,7 @@ namespace AppManager {
                 exclusive_suppress = true;
                 default_sandbox_row.active = false;
                 exclusive_suppress = false;
-            }
+            };
             portable_home_row.notify["active"].connect(() => on_portable_default_toggled());
             portable_config_row.notify["active"].connect(() => on_portable_default_toggled());
 
