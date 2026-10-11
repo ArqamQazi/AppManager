@@ -33,31 +33,16 @@ AppManager doesn't require FUSE to run, thanks to the [uruntime](https://github.
 - **Background app updates**: Optional automatic update checks with configurable interval (daily, weekly, monthly), notifications when updates are found, and optional automatic installs. Each run is written to an update log.
 - **Per-app customization**: Rename an app, change its icon, keywords or `StartupWMClass`, add launch arguments and environment variables, hide it from the app drawer, or add it to `$PATH`. These settings survive updates.
 - **GitHub authentication**: Optionally store a GitHub personal access token to raise the API rate limit from 60 to 5,000 requests per hour. The token is kept in the system keyring (GNOME Keyring, KWallet, KeePassXC) when a Secret Service is available, and otherwise in an AES-256-GCM blob bound to the machine and user account, so a synced or copied config file is useless elsewhere.
-- **Per-app sandboxing**: Run an app isolated from the rest of your files, with per-permission switches for network, sound, legacy X11, hardware acceleration, camera, game controllers, Bluetooth, notifications, tray icons, location and the full session bus. A sandboxed app gets its own home folder, reaches only the folders you grant it, and talks to desktop services through a filtered D-Bus unless you hand it the full session bus.
+- **Per-app sandboxing**: Give each app a private home and control its access to personal files, network, sound, devices and desktop services. Choose a preset, customize permissions, or use an AppHub template. See the [sandboxing guide](sandboxing/README.md).
 
 ## Sandboxing
 
-Open an app's details, then **Privacy & Security**, and pick **Standard** or **Strict**. Standard keeps the network, sound, legacy X11, notifications, tray icons and the Downloads folder; Strict takes them away. Both keep hardware acceleration on, since software rendering makes most apps unusable without making them safer. Every switch can be changed on its own, which the profile then shows as **Custom**. To sandbox every newly installed app, or to grant a folder to all sandboxed apps at once, see **Preferences → Security & Privacy**.
+Run portable AppImages with a private home and configurable access to your files,
+network, devices and desktop services. Choose **Standard** or **Strict** in an
+app's **Privacy & Security** settings, or use its AppHub template.
 
-**AppHub installs use the store's per-app permissions automatically.** For example, Pinta gets no network or sound access, and Gapless gets read-only access to Music. The template is matched to the downloaded artifact's URL and SHA-256 before it is applied. Folder access can be Off, Read-only or Read and write; display access can select Wayland, X11 or neither. Manual permission changes are preserved across upgrades. A small shield next to an app's icon in list and grid views indicates that sandboxing is enabled. The Standard-default preference applies to apps outside AppHub.
-
-Policy retrieval failures stop installation rather than silently applying a broader template. FUSE-inside-sandbox grants are currently unsupported, so AppHub templates requiring them, such as Gear Lever's, are refused. Existing installations are not automatically converted to AppHub templates; a recognized AppHub download applies the template during installation or replacement.
-
-It needs `bubblewrap`, `xdg-dbus-proxy` and `fusermount3` on the host. `bwrap` and the proxy are not bundled, because `bwrap` is setuid on some distributions and the proxy links the host's glib. The `squashfuse` and `dwarfs` FUSE drivers are bundled in the AppImage. An app set to be sandboxed refuses to start when that tooling is missing, rather than starting unconfined.
-
-<details> <summary> <H4>Limits worth knowing</H4> <b>(click to open)</b> </summary>
-
-- **The app starts with an empty home.** A sandboxed app gets its own home folder beside the AppImage (`<app>.sandbox`), so it will not see the settings, accounts or vaults it had before, and it will ask you to set those up again. Nothing is lost: the old configuration is still in your real home, and turning the sandbox off brings the app back to it. The exception is an app that used portable `.home`/`.config` folders: those move into `<app>.sandbox` when the sandbox is turned on, and stay there.
-- **The app sees only the folders you granted.** A file dialog inside the sandbox shows the sandbox's own view of your files, and drag-and-drop from outside hands over paths the app cannot open. Grant the folder instead. Clicking a link or "open containing folder" does nothing: there is no browser or file manager inside the sandbox, and no channel out to the one on your desktop.
-- **A granted folder is granted whole, at its real path.** A symlink inside it that points somewhere else leads nowhere unless you also grant the folder it points at.
-- **Sound includes the microphone.** One connection carries playback and capture, so there is no way to grant one without the other.
-- **Network is on or off.** There is no per-app firewall, and with the network on the app shares the host's network namespace, so it can reach services listening on localhost.
-- **X11 is not a security boundary.** Any X11 client can read any other's input and windows. The Legacy X11 switch is there for compatibility; isolation comes from Wayland.
-- **Location is enforced by AppManager alone.** The switch decides whether the app can reach the system location service at all. Because the app talks to it through AppManager's D-Bus proxy, your desktop sees the request as coming from a system component and does not prompt you or list the app in its own location settings - so this switch is the only place it can be turned off.
-- **Chromium-based apps are told not to sandbox themselves.** Electron and Chromium isolate their own renderers by creating a user namespace, which this sandbox does not allow, and their fallback aborts the app outright. When AppManager finds `chrome-sandbox` in the app, it therefore launches it with `--no-sandbox`, and their renderers run confined by this sandbox instead of by their own - the same position Electron apps are in under Flatpak without zypak.
-- **Only portable installs** can be sandboxed. An extracted AppDir is not supported yet.
-
-</details>
+See the [sandboxing guide](sandboxing/README.md) for setup, profiles, requirements
+and known limitations.
 
 ## Requirements
 
