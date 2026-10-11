@@ -407,6 +407,7 @@ namespace AppManager {
 
             var all_records = registry.list();
             has_installations = all_records.length > 0;
+            update_fuse_banner(all_records);
             var filtered_list = new Gee.ArrayList<InstallationRecord>();
 
             foreach (var record in all_records) {
@@ -420,7 +421,7 @@ namespace AppManager {
             }
 
             // Show the import hint (overlay) when only AppManager itself is installed.
-            // Hide it when filtered_list is empty — the empty-state page has its own button.
+            // Hide it when filtered_list is empty - the empty-state page has its own button.
             bool only_self = has_only_self_records(all_records);
             if (import_hint_widget != null) {
                 import_hint_widget.set_visible(only_self && filtered_list.size > 0);
@@ -1060,14 +1061,16 @@ namespace AppManager {
                 toolbar.add_top_bar(search_bar);
 
                 // FUSE is not installed warning banner
-                fuse_banner = new Adw.Banner(_("FUSE is not installed. Some AppImages may fail to run"));
+                fuse_banner = new Adw.Banner(_("FUSE is missing, some apps may fail to run.") +
+                    " <a href=\"https://github.com/AppImage/AppImageKit/wiki/FUSE\">" + _("Learn more") + "</a>");
+                fuse_banner.use_markup = true;
                 fuse_banner.add_css_class("warning");
-                fuse_banner.button_label = _("Learn More");
+                fuse_banner.button_label = _("Dismiss");
                 fuse_banner.button_clicked.connect(() => {
-                    var launcher = new Gtk.UriLauncher("https://github.com/AppImage/AppImageKit/wiki/FUSE");
-                    launcher.launch.begin(this, null);
+                    settings.set_boolean("fuse-banner-dismissed", true);
+                    fuse_banner.revealed = false;
                 });
-                fuse_banner.revealed = !is_fuse_installed();
+                fuse_banner.revealed = false;  // set from update_fuse_banner() once records are known
                 toolbar.add_top_bar(fuse_banner);
 
                 // Frozen "My Apps" title bar with view mode toggle
@@ -1180,19 +1183,26 @@ namespace AppManager {
             refresh_installations();
         }
 
-        private bool is_fuse_installed() {
-            // Classic AppImage type-2 runtimes need the fusermount helper
-            // and link against libfuse.so.2. Require both so the banner
-            // shows on systems that only have FUSE 3 or are missing one half.
-            bool has_fusermount2 = GLib.Environment.find_program_in_path("fusermount") != null;
-
-            var module = GLib.Module.open("libfuse.so.2", GLib.ModuleFlags.LAZY);
-            bool has_libfuse2 = module != null;
-            if (module != null) {
-                module.close();
+        // Warn only when an installed app actually needs FUSE bits this system
+        // lacks. Apps on uruntime mount through a user namespace instead, so
+        // they never trigger the banner.
+        private void update_fuse_banner(InstallationRecord[] records) {
+            if (fuse_banner == null) {
+                return;
             }
 
-            return has_fusermount2 && has_libfuse2;
+            if (settings.get_boolean("fuse-banner-dismissed")) {
+                fuse_banner.revealed = false;
+                return;
+            }
+
+            foreach (var record in records) {
+                if (FuseSupport.record_cannot_mount(record)) {
+                    fuse_banner.revealed = true;
+                    return;
+                }
+            }
+            fuse_banner.revealed = false;
         }
 
         private void on_search_changed() {
@@ -1212,6 +1222,10 @@ namespace AppManager {
             var check_updates_action = new GLib.SimpleAction("check_updates", null);
             check_updates_action.activate.connect(on_check_updates_accel);
             add_window_action(check_updates_action);
+
+            var update_apps_action = new GLib.SimpleAction("update_apps", null);
+            update_apps_action.activate.connect(on_update_apps_accel);
+            add_window_action(update_apps_action);
 
             var show_menu_action = new GLib.SimpleAction("show_menu", null);
             show_menu_action.activate.connect(() => {
@@ -1321,6 +1335,12 @@ namespace AppManager {
                 return;
             }
             start_update_check();
+        }
+
+        private void on_update_apps_accel() {
+            if (update_state == UpdateWorkflowState.READY_TO_UPDATE) {
+                start_update_install();
+            }
         }
 
         private void toggle_search_mode() {
@@ -1541,7 +1561,7 @@ namespace AppManager {
         private void finalize_single_update(UpdateResult result) {
             var key = record_state_key(result.record);
             updating_records.remove(key);
-            // Always remove from pending — whether success or failure
+            // Always remove from pending - whether success or failure
             pending_update_keys.remove(key);
             if (result.status == UpdateStatus.UPDATED) {
                 failed_update_keys.unset(key);
@@ -1584,7 +1604,7 @@ namespace AppManager {
                 staged_updates.save();
             }
 
-            // Remove all from pending — failures are no longer "pending"
+            // Remove all from pending - failures are no longer "pending"
             pending_update_keys.clear();
             refresh_installations();
             set_update_button_state(UpdateWorkflowState.READY_TO_CHECK);
@@ -1853,6 +1873,7 @@ namespace AppManager {
                     window_group.title = _("Window");
                 }
                 assign_shortcut_title(builder, "shortcut_check_updates", _("Check for updates"));
+                assign_shortcut_title(builder, "shortcut_update_apps", _("Update apps"));
                 assign_shortcut_title(builder, "shortcut_main_menu", _("Show main menu"));
                 assign_shortcut_title(builder, "shortcut_search", _("Search"));
                 assign_shortcut_title(builder, "shortcut_show_overlay", _("Show shortcuts"));

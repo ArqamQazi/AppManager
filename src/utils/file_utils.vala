@@ -77,7 +77,8 @@ namespace AppManager.Utils {
                     file.delete(null);
                     return;
                 }
-                var enumerator = file.enumerate_children(
+                
+                var enumerator = File.new_for_path(path).enumerate_children(
                     "standard::name,standard::type", FileQueryInfoFlags.NOFOLLOW_SYMLINKS);
                 FileInfo info;
                 while ((info = enumerator.next_file()) != null) {
@@ -96,7 +97,7 @@ namespace AppManager.Utils {
 
         /**
          * True when the directory tree at `path` contains no regular files or
-         * symlinks — only (possibly nested) empty directories. Used to decide
+         * symlinks - only (possibly nested) empty directories. Used to decide
          * whether a leftover portable folder is safe to remove silently. On any
          * error it returns false (conservative: never treat as empty).
          */

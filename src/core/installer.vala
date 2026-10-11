@@ -303,7 +303,7 @@ namespace AppManager.Core {
          * Full install flow: checks architecture, detects existing installation,
          * and either upgrades or installs. Sets is_upgrade to true if an existing
          * installation was replaced. With keep_both, an existing installation is
-         * never replaced — the app installs side by side as a numbered copy.
+         * never replaced - the app installs side by side as a numbered copy.
          */
         public InstallationRecord install_or_upgrade(string file_path, out bool is_upgrade, bool keep_both = false) throws Error {
             is_upgrade = false;
@@ -357,7 +357,7 @@ namespace AppManager.Core {
 
         public InstallationRecord reinstall(string file_path, InstallationRecord old_record, InstallMode mode, AppHubPolicy? policy = null) throws Error {
             // Validate new AppImage before touching the old installation.
-            // Uses the same desktop/icon extraction that install does — if the
+            // Uses the same desktop/icon extraction that install does - if the
             // new package is corrupted or badly packed, we bail out here and
             // the currently installed version stays untouched.
             validate_appimage(file_path);
@@ -403,7 +403,7 @@ namespace AppManager.Core {
 
         /**
          * Pre-flight validation: extracts metadata, desktop entry and icon
-         * from the AppImage — the same checks install_sync/finalize performs.
+         * from the AppImage - the same checks install_sync/finalize performs.
          * Throws on any problem so the caller can abort before uninstalling
          * the old version.
          */
@@ -451,11 +451,14 @@ namespace AppManager.Core {
                 // Keep the secondary-copy suffix stable across updates (frozen counter).
                 record.copy_index = old_record.copy_index;
                 
-                // Carry over last_modified, content_length and release tag from old record
+                // Carry over last_modified and content_length from old record
                 record.last_modified = old_record.last_modified;
                 record.content_length = old_record.content_length;
-                record.last_release_tag = old_record.last_release_tag;
-                
+                // Note: last_release_tag is intentionally NOT carried over. The
+                // updater sets it after a successful release-based update; for other
+                // upgrade paths (manual reinstall, zsync) a stale tag would make the
+                // next probe report "already current" for a release never installed.
+
                 // Carry over zsync_update_info from old record as safety net
                 // (also re-extracted from new AppImage in finalize_desktop_and_icon)
                 record.zsync_update_info = old_record.zsync_update_info;
@@ -985,7 +988,7 @@ namespace AppManager.Core {
 
                 // Install additional desktop entries from usr/share/applications/ (issue #106).
                 // No-op when AppImage has no sub-entries; never aborts the install on failure.
-                install_extra_desktop_entries(record, exec_path, assets_path, temp_dir, primary_bin);
+                install_extra_desktop_entries(record, exec_path, assets_path, temp_dir, primary_bin, desktop_path);
             } finally {
                 Utils.FileUtils.remove_dir_recursive(temp_dir);
             }
@@ -1025,7 +1028,8 @@ namespace AppManager.Core {
                 if (record.icon_path != null && File.new_for_path(record.icon_path).query_exists()) {
                     File.new_for_path(record.icon_path).delete(null);
                 }
-                if (record.bin_symlink != null && File.new_for_path(record.bin_symlink).query_exists()) {
+                // Only unlink what we created
+                if (record.bin_symlink != null && bin_symlink_is_ours(record.bin_symlink, record.installed_path)) {
                     File.new_for_path(record.bin_symlink).delete(null);
                 }
 
@@ -1039,8 +1043,7 @@ namespace AppManager.Core {
                     if (f.query_exists()) f.delete(null);
                 }
                 foreach (var path in record.extra_bin_symlinks ?? new string[0]) {
-                    var f = File.new_for_path(path);
-                    if (f.query_exists()) f.delete(null);
+                    if (bin_symlink_is_ours(path, record.installed_path)) File.new_for_path(path).delete(null);
                 }
 
                 // Remove AppImage portable folders (.home/.config) unless the caller is
@@ -1087,7 +1090,7 @@ namespace AppManager.Core {
                 if (record.icon_path != null && File.new_for_path(record.icon_path).query_exists()) {
                     File.new_for_path(record.icon_path).delete(null);
                 }
-                if (record.bin_symlink != null && File.new_for_path(record.bin_symlink).query_exists()) {
+                if (record.bin_symlink != null && bin_symlink_is_ours(record.bin_symlink, record.installed_path)) {
                     File.new_for_path(record.bin_symlink).delete(null);
                 }
                 foreach (var path in record.extra_desktop_files ?? new string[0]) {
@@ -1099,8 +1102,7 @@ namespace AppManager.Core {
                     if (f.query_exists()) f.delete(null);
                 }
                 foreach (var path in record.extra_bin_symlinks ?? new string[0]) {
-                    var f = File.new_for_path(path);
-                    if (f.query_exists()) f.delete(null);
+                    if (bin_symlink_is_ours(path, record.installed_path)) File.new_for_path(path).delete(null);
                 }
             } catch (Error e) {
                 warning("Failed to cleanup after installation error: %s", e.message);
@@ -1321,14 +1323,14 @@ namespace AppManager.Core {
          *  - inject the same Uninstall action as the primary entry (tears down whole app)
          *  - strip TryExec / DBusActivatable
          * Other fields (StartupWMClass, Categories, MimeType, NoDisplay, localized Name[xx])
-         * are intentionally left untouched — these are what distinguish each component.
+         * are intentionally left untouched - these are what distinguish each component.
          */
         private string rewrite_sub_desktop(string sub_desktop_path, string sub_binary_symlink_path, string? sub_icon_name, string pristine_args, InstallationRecord record) throws Error {
             var entry = new DesktopEntry(sub_desktop_path);
 
             // Apply the same custom env vars and command-line args as the primary entry.
             // Each component keeps its own pristine args (captured at install in original_sub_args).
-            // Only the args the user ADDED beyond the root default are appended — appending the
+            // Only the args the user ADDED beyond the root default are appended - appending the
             // whole custom string would drag the root's default field codes (e.g. %F) into the
             // component's own args. Using pristine_args (not the current Exec) avoids compounding.
             var env_prefix = build_env_prefix(record.custom_env_vars);
@@ -1413,8 +1415,7 @@ namespace AppManager.Core {
             foreach (var path in record.extra_bin_symlinks ?? new string[0]) {
                 if (path == record.bin_symlink) continue;
                 try {
-                    var f = File.new_for_path(path);
-                    if (f.query_exists()) f.delete(null);
+                    if (bin_symlink_is_ours(path, record.installed_path)) File.new_for_path(path).delete(null);
                 } catch (Error e) {
                     debug("Failed to remove extra bin symlink %s: %s", path, e.message);
                 }
@@ -1426,19 +1427,25 @@ namespace AppManager.Core {
 
         /**
          * Install the .desktop entries from usr/share/applications/ inside the AppImage that the
-         * AppImage actually ships a command for (issue #106 — multi-component AppImages such as
+         * AppImage actually ships a command for (issue #106 - multi-component AppImages such as
          * office suites, which present several separate menu entries).
          *
          * Bundling a whole toolkit or runtime commonly drags its background-service entries along
          * too (helper daemons, settings modules, protocol helpers). Those point at binaries the
          * AppImage keeps under libexec, or does not contain at all, so requiring the Exec binary to
-         * be a real command keeps them out of $PATH and the menu. Each accepted entry gets a
+         * be a real command keeps them out of $PATH and the menu, as does requiring a hidden entry
+         * to carry MimeType associations that justify installing it at all. Each accepted entry gets a
          * ~/.local/bin/<name> symlink to the AppImage (multi-call dispatch via argv[0]); entries
          * that share a binary share the one command.
          *
+         * The root .desktop the primary pass installed is normally a copy of one of these payload
+         * entries, so it turns up here too and must not be installed twice. Its filename is no help:
+         * the AppDir spec lets it be anything (MKVToolNix ships mkvtoolnix-gui.desktop in the root
+         * and org.bunkus.mkvtoolnix-gui.desktop in the payload), so it is matched by content.
+         *
          * Tracks all created paths on the record for clean uninstall. No-op when no extras present.
          */
-        private void install_extra_desktop_entries(InstallationRecord record, string exec_path, string assets_path, string temp_root, string primary_bin) {
+        private void install_extra_desktop_entries(InstallationRecord record, string exec_path, string assets_path, string temp_root, string primary_bin, string primary_desktop_path) {
             string[] extras;
             try {
                 extras = AppImageAssets.extract_extra_desktop_entries(assets_path, temp_root);
@@ -1450,7 +1457,10 @@ namespace AppManager.Core {
                 return;
             }
 
-            // Clear any prior extras (upgrade path) — files on disk are stale.
+            // Signature of the bundled root entry, before rewrite_desktop() touched it.
+            var primary_signature = DesktopEntry.entry_signature(primary_desktop_path);
+
+            // Clear any prior extras (upgrade path) - files on disk are stale.
             remove_extra_entries(record);
 
             var installed_desktops = new Gee.ArrayList<string>();
@@ -1473,6 +1483,15 @@ namespace AppManager.Core {
                     var sub_entry = new DesktopEntry(sub_path);
                     var sub_exec = sub_entry.exec ?? "";
 
+                    // NoDisplay hides the entry from the menu, leaving association as its only
+                    // purpose; with no MimeType it can be neither launched nor matched, and would
+                    // just add a stray command to $PATH. This is how a bundled dependency's own
+                    // entry leaks in (Inkscape ships python3.8, ONLYOFFICE ships keditbookmarks).
+                    if (sub_entry.no_display && (sub_entry.mime_type == null || sub_entry.mime_type.strip() == "")) {
+                        debug("Skipping sub-desktop %s: hidden and provides no associations", sub_path);
+                        continue;
+                    }
+
                     var base_token = DesktopEntry.extract_base_exec_token(sub_exec);
                     if (base_token == null || base_token.strip() == "") {
                         debug("Skipping sub-desktop %s: empty Exec", sub_path);
@@ -1486,14 +1505,19 @@ namespace AppManager.Core {
                     var dest = Path.build_filename(AppPaths.desktop_dir, Path.get_basename(sub_path));
                     if (dest == record.desktop_file) {
                         // The AppImage's root .desktop is a symlink into usr/share/applications/, so
-                        // it shows up here too — the primary pass already installed it.
+                        // it shows up here too - the primary pass already installed it.
+                        continue;
+                    }
+                    if (primary_signature != null && DesktopEntry.entry_signature(sub_path) == primary_signature) {
+                        // Same launcher as the root entry, only under a different filename.
+                        debug("Skipping sub-desktop %s: duplicate of the root entry", sub_path);
                         continue;
                     }
 
                     if (!targets.has_key(sub_bin)) {
                         string? sym = null;
                         if (AppImageAssets.has_bundled_binary(assets_path, temp_root, sub_bin)) {
-                            sym = create_bin_symlink(exec_path, sub_bin);
+                            sym = create_bin_symlink(exec_path, sub_bin, record.installed_path, null);
                         }
                         targets.set(sub_bin, sym ?? "");
                     }
@@ -1754,26 +1778,68 @@ namespace AppManager.Core {
             }
         }
 
-        private string? create_bin_symlink(string exec_path, string slug) {
+        /**
+         * Whether <path> is a symlink AppManager created, i.e. one pointing into the applications
+         * directory. A real binary, a user script or another package's symlink is not ours to
+         * replace or delete (issue #175). Queried NOFOLLOW so a link left dangling by a removed
+         * app still counts as ours.
+         */
+        private static bool bin_symlink_is_ours(string path, string? installed_path = null) {
             try {
-                var bin_dir = AppPaths.local_bin_dir;
-                
-                var symlink_path = Path.build_filename(bin_dir, slug);
-                var symlink_file = File.new_for_path(symlink_path);
-                
-                // Remove existing symlink if it exists
-                if (symlink_file.query_exists()) {
+                var info = File.new_for_path(path).query_info(
+                    FileAttribute.STANDARD_IS_SYMLINK + "," + FileAttribute.STANDARD_SYMLINK_TARGET,
+                    FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+                if (!info.get_is_symlink()) {
+                    return false;
+                }
+                var target = info.get_symlink_target();
+                if (target == null) {
+                    return false;
+                }
+                if (AppPaths.is_inside_applications_dir(target)) {
+                    return true;
+                }
+                // A folder migration that partly failed still switches the configured directory, so
+                // an app left behind sits outside it - its own link is ours all the same. Extracted
+                // installs link to <installed_path>/AppRun, hence the prefix.
+                if (installed_path == null || installed_path.strip() == "") {
+                    return false;
+                }
+                return target == installed_path || target.has_prefix(installed_path + "/");
+            } catch (Error e) {
+                return false;   // absent, or unreadable: nothing we may touch
+            }
+        }
+
+        /**
+         * Symlink <slug> in the user bin dir to the AppImage. Links we own are replaced, so
+         * upgrades keep working once a name is established; anything else is left alone and
+         * `name_taken` is set (issue #175 - this used to delete whatever was there).
+         */
+        private string? create_bin_symlink(string exec_path, string slug, string? installed_path, out bool name_taken) {
+            name_taken = false;
+            var symlink_path = Path.build_filename(AppPaths.local_bin_dir, slug);
+            var symlink_file = File.new_for_path(symlink_path);
+
+            try {
+                if (bin_symlink_is_ours(symlink_path, installed_path)) {
                     symlink_file.delete(null);
                 }
-                
-                // Create symlink
+                // Nothing was deleted for a foreign occupant, so this fails with EXISTS and is the
+                // existence check too - no window between looking and linking.
                 symlink_file.make_symbolic_link(exec_path, null);
-                debug("Created symlink: %s -> %s", symlink_path, exec_path);
-                return symlink_path;
             } catch (Error e) {
-                warning("Failed to create symlink for %s: %s", slug, e.message);
+                if (e is IOError.EXISTS) {
+                    name_taken = true;
+                    warning("Not linking %s: it exists and was not created by AppManager", symlink_path);
+                } else {
+                    warning("Failed to create symlink for %s: %s", slug, e.message);
+                }
                 return null;
             }
+
+            debug("Created symlink: %s -> %s", symlink_path, exec_path);
+            return symlink_path;
         }
 
         /**
@@ -1897,9 +1963,8 @@ namespace AppManager.Core {
                 return true;
             }
             try {
-                var file = File.new_for_path(record.bin_symlink);
-                if (file.query_exists()) {
-                    file.delete(null);
+                if (bin_symlink_is_ours(record.bin_symlink, record.installed_path)) {
+                    File.new_for_path(record.bin_symlink).delete(null);
                     debug("Removed symlink: %s", record.bin_symlink);
                 }
                 record.bin_symlink = null;

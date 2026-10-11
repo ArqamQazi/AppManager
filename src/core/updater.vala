@@ -414,6 +414,25 @@ namespace AppManager.Core {
             // pre-releases, scan the releases list instead so pre-releases are visible.
             bool latest_stable = (tag == "latest" && !include_prerelease);
 
+            // A pinned tag resolves directly via /releases/tags/<tag>. The list scan
+            // below only sees the newest page, which misses rolling tags that sit deep
+            // in the release history (e.g. FreeCAD's "weeklies").
+            if (tag != "latest") {
+                try {
+                    var tag_url = "https://api.github.com/repos/%s/%s/releases/tags/%s".printf(
+                        owner, repo, GLib.Uri.escape_string(tag, null, false));
+                    var tag_root = fetch_json(tag_url, "application/vnd.github+json", null);
+                    if (tag_root != null && tag_root.get_node_type() == Json.NodeType.OBJECT) {
+                        var source = find_zsync_asset_with_version(tag_root.get_object(), pattern);
+                        if (source != null) return source;
+                    }
+                } catch (Error e) {
+                    // Unknown tag (404) or API failure: fall through to the
+                    // prefix-tolerant list scan below.
+                    debug("gh-releases-zsync: tag lookup for %s failed: %s", tag, e.message);
+                }
+            }
+
             try {
                 // Use appropriate API endpoint based on tag
                 string api_url;
@@ -661,19 +680,19 @@ namespace AppManager.Core {
 
                 var latest = release.version;
                 var current = record.version;
-                // Sanitize current version — treat unparseable values (e.g. "UNKNOWN") as null
+                // Sanitize current version - treat unparseable values (e.g. "UNKNOWN") as null
                 var current_sanitized = VersionUtils.sanitize(current);
                 
+                // The tag we last installed is authoritative. Upstreams that tag by
+                // date (e.g. "weekly-2026.08.26") never match the app's own version,
+                // so magnitude comparison alone reports an update on every check.
+                if (release.tag_name != null && record.last_release_tag == release.tag_name) {
+                    return new UpdateProbeResult(record, false, latest ?? release.tag_name, UpdateSkipReason.ALREADY_CURRENT, _("Already up to date"));
+                }
+
                 // Version comparison: if both have valid versions, compare them
                 if (latest != null && current_sanitized != null && compare_versions(latest, current) <= 0) {
                     return new UpdateProbeResult(record, false, latest, UpdateSkipReason.ALREADY_CURRENT, _("Already up to date"));
-                }
-                
-                // Fallback: if either version is missing/unparseable, compare release tags
-                if ((latest == null || current_sanitized == null) && release.tag_name != null) {
-                    if (record.last_release_tag == release.tag_name) {
-                        return new UpdateProbeResult(record, false, release.tag_name, UpdateSkipReason.ALREADY_CURRENT, _("Already up to date"));
-                    }
                 }
 
                 return new UpdateProbeResult(record, true, latest ?? release.tag_name);
@@ -729,23 +748,23 @@ namespace AppManager.Core {
 
                 var latest = release.version;
                 var current = record.version;
-                // Sanitize current version — treat unparseable values (e.g. "UNKNOWN") as null
+                // Sanitize current version - treat unparseable values (e.g. "UNKNOWN") as null
                 var current_sanitized = VersionUtils.sanitize(current);
                 
+                // The tag we last installed is authoritative. Upstreams that tag by
+                // date (e.g. "weekly-2026.08.26") never match the app's own version,
+                // so magnitude comparison alone reports an update on every check.
+                if (release.tag_name != null && record.last_release_tag == release.tag_name) {
+                    record_skipped(record, UpdateSkipReason.ALREADY_CURRENT);
+                    log_update_event(record, "SKIP", "release tag unchanged");
+                    return new UpdateResult(record, UpdateStatus.SKIPPED, _("Already up to date"), latest ?? release.tag_name, UpdateSkipReason.ALREADY_CURRENT);
+                }
+
                 // Version comparison: if both have valid versions, compare them
                 if (latest != null && current_sanitized != null && compare_versions(latest, current) <= 0) {
                     record_skipped(record, UpdateSkipReason.ALREADY_CURRENT);
                     log_update_event(record, "SKIP", "already current");
                     return new UpdateResult(record, UpdateStatus.SKIPPED, _("Already up to date"), latest, UpdateSkipReason.ALREADY_CURRENT);
-                }
-                
-                // Fallback: if either version is missing/unparseable, compare release tags
-                if ((latest == null || current_sanitized == null) && release.tag_name != null) {
-                    if (record.last_release_tag == release.tag_name) {
-                        record_skipped(record, UpdateSkipReason.ALREADY_CURRENT);
-                        log_update_event(record, "SKIP", "release tag unchanged");
-                        return new UpdateResult(record, UpdateStatus.SKIPPED, _("Already up to date"), release.tag_name, UpdateSkipReason.ALREADY_CURRENT);
-                    }
                 }
 
                 var candidates = select_appimage_assets(release.assets);
@@ -773,7 +792,7 @@ namespace AppManager.Core {
                             continue;
                         }
 
-                        // Verification passed — install
+                        // Verification passed - install
                         InstallationRecord? new_record = null;
                         try {
                             new_record = installer.upgrade(download.file_path, record);
@@ -1116,11 +1135,11 @@ namespace AppManager.Core {
             }
 
             if (normalize_app_name(desktop_name) == normalize_app_name(record_name)) {
-                return null; // Match — verification passed
+                return null; // Match - verification passed
             }
 
             // Secondary copies carry a " N" suffix that the candidate's bundled
-            // .desktop Name won't have — compare against the base name instead.
+            // .desktop Name won't have - compare against the base name instead.
             if (record.copy_index >= 2) {
                 var base_name = InstallationRegistry.base_name_of(record.original_name ?? record_name);
                 if (normalize_app_name(desktop_name) == normalize_app_name(base_name)) {
@@ -1531,7 +1550,7 @@ namespace AppManager.Core {
                 remote_sha1 = zsync_info.sha1.strip().down();
             }
             
-            // SHA-1 is required — without it we cannot reliably determine update state
+            // SHA-1 is required - without it we cannot reliably determine update state
             if (remote_sha1 == null) {
                 warning("probe_zsync[%s]: zsync header has no SHA-1, treating as malformed", record.name ?? record.id);
                 return new UpdateProbeResult(record, false, null, null, _("Malformed zsync file (no checksum)"));
@@ -1541,7 +1560,7 @@ namespace AppManager.Core {
             // an update, a changed file almost always does. Versions are only consulted
             // to suppress auto-repackaging rebuild churn (e.g. pkgforge) where SHA-1
             // flips but the upstream version is identical. Magnitude comparison is
-            // intentionally avoided — upstreams like claude-desktop-debian publish the
+            // intentionally avoided - upstreams like claude-desktop-debian publish the
             // packaging version and the upstream Claude version in different orderings
             // across the .desktop file and the git tag, so greater-than/less-than is
             // not meaningful.
@@ -1557,7 +1576,7 @@ namespace AppManager.Core {
             }
 
             // SHA-1 differs. Only suppress if BOTH sides have a version AND they
-            // normalize to the same string — a genuine no-op rebuild (same tag,
+            // normalize to the same string - a genuine no-op rebuild (same tag,
             // same X-AppImage-Version, just a new build artifact). Pkgforge "-N"
             // bumps are preserved by normalize_for_equality and therefore treated
             // as updates.
@@ -1648,7 +1667,7 @@ namespace AppManager.Core {
                 remote_sha1 = zsync_info.sha1.strip().down();
             }
             
-            // SHA-1 is required — without it we cannot reliably determine update state
+            // SHA-1 is required - without it we cannot reliably determine update state
             if (remote_sha1 == null) {
                 warning("update_zsync[%s]: zsync header has no SHA-1, treating as malformed", record.name ?? record.id);
                 record_skipped(record, UpdateSkipReason.UNSUPPORTED_SOURCE);
@@ -1776,7 +1795,7 @@ namespace AppManager.Core {
                         if (header_url.has_prefix("http://") || header_url.has_prefix("https://")) {
                             download_url = header_url;
                         } else {
-                            // Relative URL — resolve against the zsync URL
+                            // Relative URL - resolve against the zsync URL
                             var clean_zsync = zsync_url;
                             var q = clean_zsync.index_of_char('?');
                             if (q >= 0) clean_zsync = clean_zsync.substring(0, q);
@@ -1861,7 +1880,7 @@ namespace AppManager.Core {
          * Execute zsync2 to perform delta download.
          * @param zsync_path Path to zsync2 binary
          * @param zsync_arg URL or local-file path passed to zsync2 as the .zsync source
-         * @param original_zsync_url Original (pre-redirect) .zsync URL — used only to derive a clean output filename
+         * @param original_zsync_url Original (pre-redirect) .zsync URL - used only to derive a clean output filename
          * @param zsync_info Parsed zsync header (for canonical Filename)
          * @param record Installation record (for fallback filename)
          * @param seed_path Path to existing AppImage to use as seed
@@ -1871,7 +1890,7 @@ namespace AppManager.Core {
          */
         private string run_zsync(string zsync_path, string zsync_arg, string original_zsync_url, ZsyncFileInfo? zsync_info, InstallationRecord record, string seed_path, string output_dir, GLib.Cancellable? cancellable) throws Error {
             // Determine output filename. Prefer (in order):
-            //   1. Filename: field from the zsync header — canonical, redirect-proof
+            //   1. Filename: field from the zsync header - canonical, redirect-proof
             //   2. Basename of the original zsync URL (pre-redirect), with any query
             //      string stripped
             //   3. Synthetic fallback based on the record id

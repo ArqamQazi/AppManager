@@ -116,6 +116,15 @@ namespace AppManager {
             content_box.append(path_banner);
             update_path_banner_visibility();
 
+            if (FuseSupport.record_cannot_mount(record)) {
+                var fuse_banner = new Adw.Banner(_("FUSE is missing, this app cannot run.") +
+                    " <a href=\"https://github.com/AppImage/AppImageKit/wiki/FUSE\">" + _("Learn more") + "</a>");
+                fuse_banner.use_markup = true;
+                fuse_banner.add_css_class("warning");
+                fuse_banner.revealed = true;
+                content_box.append(fuse_banner);
+            }
+
             content_box.append(detail_page);
             toolbar.set_content(content_box);
             this.child = toolbar;
@@ -185,6 +194,7 @@ namespace AppManager {
             open_button.add_css_class("pill");
             open_button.add_css_class("suggested-action");
             open_button.add_css_class("open-button");
+            open_button.sensitive = !FuseSupport.record_cannot_mount(record);
 
             var launch_spinner = new Gtk.Spinner();
             launch_spinner.set_visible(false);
@@ -1741,7 +1751,13 @@ namespace AppManager {
                         record.custom_add_to_path = null;
                         registry.update(record, false);
                     } else {
+                        // The switch snapping back on its own says nothing about why (issue #175).
+                        var conflict = record.bin_conflict_slug;
                         path_row.active = false;
+                        if (conflict != null) {
+                            show_toast(_("Not added to $PATH: '%s' already exists in %s")
+                                .printf(conflict, AppPaths.local_bin_dir));
+                        }
                     }
                 } else {
                     if (installer.remove_bin_symlink_for_record(record)) {
@@ -2116,6 +2132,14 @@ namespace AppManager {
                 }
             });
             dialog.present(this);
+        }
+
+        /** Routes a message to the main window's toast overlay this page lives in. */
+        private void show_toast(string message) {
+            var window = this.get_root() as MainWindow;
+            if (window != null) {
+                window.add_toast(message);
+            }
         }
 
         private void update_path_banner_visibility() {
